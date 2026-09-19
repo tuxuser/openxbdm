@@ -15,8 +15,10 @@ path = "src/main.rs"
 xeedee = { path = "../xeedee", features = ["tokio"] }
 
 clap = { version = "4.6.1", features = ["derive"] }
-fuser = { workspace = true }
 rootcause = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[target.'cfg(not(windows))'.dependencies]
+fuser = { workspace = true }

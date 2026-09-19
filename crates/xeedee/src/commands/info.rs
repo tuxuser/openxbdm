@@ -76,11 +76,18 @@ impl Command for SysTime {
     fn parse(&self, response: Response) -> Result<Self::Output, rootcause::Report<Error>> {
         let head = response.expect_ok().map_err(rootcause::Report::new)?;
         let kv = parse_kv_line(&head);
+        // Real hardware has been observed responding with `high=`/`low=`
+        // instead of the `clockhi=`/`clocklo=` names used elsewhere in XBDM
+        // docs/captures — accept either.
         let hi_value = kv
-            .require("clockhi")
+            .get("clockhi")
+            .or_else(|| kv.get("high"))
+            .ok_or(crate::error::ParseError::MissingKey { key: "clockhi" })
             .map_err(|e| rootcause::Report::new(Error::from(e)))?;
         let lo_value = kv
-            .require("clocklo")
+            .get("clocklo")
+            .or_else(|| kv.get("low"))
+            .ok_or(crate::error::ParseError::MissingKey { key: "clocklo" })
             .map_err(|e| rootcause::Report::new(Error::from(e)))?;
         let hi =
             value_u32(hi_value, "clockhi").map_err(|e| rootcause::Report::new(Error::from(e)))?;

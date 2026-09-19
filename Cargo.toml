@@ -29,6 +29,7 @@ futures-util = { version = "0.3.32", default-features = false, features = ["std"
 jiff = "0.2.23"
 memchr = "2.8.0"
 rootcause = "0.12.1"
+socket2 = "0.6"
 thiserror = "2.0.18"
 tokio = { version = "1.52.1", features = ["net", "io-util", "rt-multi-thread", "macros", "time", "fs", "io-std"] }
 tokio-util = { version = "0.7.18", features = ["compat"] }

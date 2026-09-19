@@ -67,6 +67,21 @@ impl Command for Modules {
                 .map_err(report_parse)?
                 .as_str()
                 .to_owned();
+            // Devkit xbdm emits `dll thread=0x...` (flag + key). Retail/RGH
+            // xbdm 21076 concatenates that into a single `dllthread=0x...` key.
+            let (thread, is_dll) = if let Some(value) = kv.get("thread") {
+                (
+                    value_u32(value, "thread").map_err(report_parse)?,
+                    kv.has_flag("dll"),
+                )
+            } else if let Some(value) = kv.get("dllthread") {
+                (
+                    value_u32(value, "dllthread").map_err(report_parse)?,
+                    true,
+                )
+            } else {
+                return Err(report_parse(ParseError::MissingKey { key: "thread" }));
+            };
             out.push(ModuleInfo {
                 name,
                 base: require_u32(&kv, "base").map_err(report_parse)?,
@@ -75,9 +90,9 @@ impl Command for Modules {
                 timestamp: require_u32(&kv, "timestamp").map_err(report_parse)?,
                 pdata: require_u32(&kv, "pdata").map_err(report_parse)?,
                 psize: require_u32(&kv, "psize").map_err(report_parse)?,
-                thread: require_u32(&kv, "thread").map_err(report_parse)?,
+                thread,
                 osize: require_u32(&kv, "osize").map_err(report_parse)?,
-                is_dll: kv.has_flag("dll"),
+                is_dll,
                 is_tls: kv.has_flag("tls"),
                 is_xbe: kv.has_flag("xbe"),
             });

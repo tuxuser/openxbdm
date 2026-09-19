@@ -242,6 +242,57 @@ fn modules_parse_flags_and_sizes() {
 }
 
 #[test]
+fn modules_parse_rgh_dllthread_key() {
+    let mods = run_command("modules_rgh", Modules);
+    insta::assert_debug_snapshot!(mods, @r###"
+    [
+        ModuleInfo {
+            name: "xboxkrnl.exe",
+            base: 2147745792,
+            size: 1769472,
+            checksum: 1488465,
+            timestamp: 1571459435,
+            pdata: 2147809792,
+            psize: 25504,
+            thread: 0,
+            osize: 1769472,
+            is_dll: false,
+            is_tls: false,
+            is_xbe: false,
+        },
+        ModuleInfo {
+            name: "xam.xex",
+            base: 2170486784,
+            size: 6356992,
+            checksum: 4889682,
+            timestamp: 1571459745,
+            pdata: 2170895360,
+            psize: 110392,
+            thread: 0,
+            osize: 5898752,
+            is_dll: true,
+            is_tls: false,
+            is_xbe: false,
+        },
+        ModuleInfo {
+            name: "xbdm.xex",
+            base: 2432696320,
+            size: 126976,
+            checksum: 123067,
+            timestamp: 1331294725,
+            pdata: 2432715776,
+            psize: 2072,
+            thread: 0,
+            osize: 135680,
+            is_dll: true,
+            is_tls: false,
+            is_xbe: false,
+        },
+    ]
+    "###);
+}
+
+#[test]
 fn threads_parse_signed_decimal_as_unsigned() {
     let ids = run_command("threads", Threads);
     insta::assert_debug_snapshot!(ids, @r###"

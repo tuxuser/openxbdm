@@ -95,6 +95,82 @@ pub struct Continue {
     pub single_step: bool,
 }
 
+/// Register groups returned by `getcontext`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContextGroups {
+    pub control: bool,
+    pub integer: bool,
+    pub floating_point: bool,
+    pub vector: bool,
+}
+
+impl Default for ContextGroups {
+    fn default() -> Self {
+        Self {
+            control: true,
+            integer: true,
+            floating_point: false,
+            vector: false,
+        }
+    }
+}
+
+/// `getcontext THREAD=<id> CONTROL INT [FP] [VR]`: read a halted
+/// thread's register context. Values are kept as strings because XBDM uses
+/// several wire widths (`0x`, `0q`, and vector blobs); callers can still
+/// parse the scalar values they need without losing information.
+#[derive(Debug, Clone, Copy)]
+pub struct GetContext {
+    pub thread: ThreadId,
+    pub groups: ContextGroups,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisterValue {
+    pub name: String,
+    pub value: String,
+}
+
+impl Command for GetContext {
+    type Output = Vec<RegisterValue>;
+
+    fn wire_line(&self) -> Result<String, rootcause::Report<Error>> {
+        let mut builder = ArgBuilder::new("getcontext").hex32("THREAD", self.thread.as_u32());
+        if self.groups.control {
+            builder = builder.flag("CONTROL");
+        }
+        if self.groups.integer {
+            builder = builder.flag("INT");
+        }
+        if self.groups.floating_point {
+            builder = builder.flag("FP");
+        }
+        if self.groups.vector {
+            builder = builder.flag("VR");
+        }
+        Ok(builder.finish())
+    }
+
+    fn expected(&self) -> ExpectedBody {
+        ExpectedBody::Multiline
+    }
+
+    fn parse(&self, response: Response) -> Result<Self::Output, rootcause::Report<Error>> {
+        let lines = response
+            .expect_multiline()
+            .map_err(rootcause::Report::new)?;
+        let mut out = Vec::new();
+        for line in lines {
+            let kv = parse_kv_line(&line);
+            out.extend(kv.pairs().map(|(name, value)| RegisterValue {
+                name: name.to_owned(),
+                value: value.as_str().to_owned(),
+            }));
+        }
+        Ok(out)
+    }
+}
+
 impl Command for Continue {
     type Output = ();
 
@@ -496,5 +572,44 @@ impl Command for Debugger {
     fn parse(&self, response: Response) -> Result<Self::Output, rootcause::Report<Error>> {
         response.expect_ok().map_err(rootcause::Report::new)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn getcontext_requests_control_and_integer_by_default() {
+        let command = GetContext {
+            thread: ThreadId(0xf900_0020),
+            groups: ContextGroups::default(),
+        };
+        assert_eq!(
+            command.wire_line().unwrap(),
+            "getcontext THREAD=0xf9000020 CONTROL INT"
+        );
+    }
+
+    #[test]
+    fn getcontext_preserves_scalar_register_widths() {
+        let command = GetContext {
+            thread: ThreadId(0xf900_0020),
+            groups: ContextGroups::default(),
+        };
+        let registers = command
+            .parse(Response::Multiline {
+                head: String::new(),
+                lines: vec![
+                    "Iar=0x823eef0c Lr=0x823f31c0".to_owned(),
+                    "r22=0q0000000000000000 r26=0q0000000000000001 r28=0q0000000000000001"
+                        .to_owned(),
+                ],
+            })
+            .unwrap();
+        assert_eq!(registers[0].name, "Iar");
+        assert_eq!(registers[0].value, "0x823eef0c");
+        assert_eq!(registers[4].name, "r28");
+        assert_eq!(registers[4].value, "0q0000000000000001");
     }
 }

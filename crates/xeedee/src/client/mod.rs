@@ -63,7 +63,7 @@ where
             _state: core::marker::PhantomData,
         }
     }
-
+    
     /// Read the initial `201 connected` banner and transition to
     /// [`Connected`]. Any non-201 response is reported as a framing
     /// error.

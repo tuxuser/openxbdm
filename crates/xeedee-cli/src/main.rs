@@ -21,6 +21,8 @@ use std::net::Ipv4Addr;
 use std::net::SocketAddr;
 use xeedee::commands::AltAddr;
 use xeedee::commands::Breakpoint;
+use xeedee::commands::ContextGroups;
+use xeedee::commands::Continue;
 use xeedee::commands::DataBreakKind;
 use xeedee::commands::DataBreakpoint;
 use xeedee::commands::DbgName;
@@ -35,12 +37,14 @@ use xeedee::commands::FileUploadKind;
 use xeedee::commands::GetConsoleFeatures;
 use xeedee::commands::GetConsoleMem;
 use xeedee::commands::GetConsoleType;
+use xeedee::commands::GetContext;
 use xeedee::commands::GetFileAttributes;
 use xeedee::commands::GetFileRange;
 use xeedee::commands::GetMem;
 use xeedee::commands::GetNetAddrs;
 use xeedee::commands::GetPid;
 use xeedee::commands::GetSocketInfo;
+use xeedee::commands::Go;
 use xeedee::commands::IsStopped;
 use xeedee::commands::MakeDirectory;
 use xeedee::commands::ModuleSections;
@@ -51,6 +55,7 @@ use xeedee::commands::Reboot;
 use xeedee::commands::RebootFlags;
 use xeedee::commands::Rename;
 use xeedee::commands::SetMem;
+use xeedee::commands::Stop;
 use xeedee::commands::SysTime;
 use xeedee::commands::ThreadId;
 use xeedee::commands::ThreadInfo;
@@ -337,6 +342,33 @@ enum Command {
     Isstopped {
         /// Thread id in hex (e.g. `0xF8001234`).
         thread: String,
+    },
+
+    /// Read control and integer registers from a halted thread.
+    Context {
+        /// Thread id in hex (e.g. `0xF8001234`).
+        thread: String,
+        /// Include floating-point registers.
+        #[arg(long)]
+        fp: bool,
+        /// Include vector registers.
+        #[arg(long)]
+        vector: bool,
+    },
+
+    /// Stop execution of the debug target.
+    Stop,
+
+    /// Resume the stopped debug target.
+    Go,
+
+    /// Continue one halted thread, optionally single-stepping it.
+    Continue {
+        /// Thread id in hex (e.g. `0xF8001234`).
+        thread: String,
+        /// Execute one instruction and halt again.
+        #[arg(long)]
+        step: bool,
     },
 
     /// Reboot the console. Flags may be combined.
@@ -1778,6 +1810,42 @@ where
                 Ok::<(), rootcause::Report<Error>>(())
             })
             .await?;
+        }
+        Command::Context { thread, fp, vector } => {
+            let client = &mut client;
+            Box::pin(async move {
+                let id = parse_thread_id(&thread)?;
+                let registers = client
+                    .run(GetContext {
+                        thread: id,
+                        groups: ContextGroups {
+                            floating_point: fp,
+                            vector,
+                            ..ContextGroups::default()
+                        },
+                    })
+                    .await?;
+                for register in registers {
+                    println!("{}={}", register.name, register.value);
+                }
+                Ok::<(), rootcause::Report<Error>>(())
+            })
+            .await?;
+        }
+        Command::Stop => {
+            client.run(Stop).await?;
+        }
+        Command::Go => {
+            client.run(Go).await?;
+        }
+        Command::Continue { thread, step } => {
+            let id = parse_thread_id(&thread)?;
+            client
+                .run(Continue {
+                    thread: id,
+                    single_step: step,
+                })
+                .await?;
         }
         Command::Reboot {
             warm,

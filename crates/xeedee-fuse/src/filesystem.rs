@@ -1,3 +1,7 @@
+#![allow(clippy::too_many_lines)]
+
+#![cfg(not(windows))]
+
 //! Bridges the async XBDM [`Client`] to a synchronous [`fuser::Filesystem`].
 //!
 //! `fuser` dispatches one request at a time from a single worker thread by

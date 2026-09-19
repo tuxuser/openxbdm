@@ -20,6 +20,7 @@ jiff = { workspace = true, optional = true }
 memchr = { workspace = true }
 powerpc = { version = "0.4.1", optional = true }
 rootcause = { workspace = true }
+socket2 = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, optional = true }
 tokio-util = { workspace = true, optional = true }
@@ -28,7 +29,7 @@ winnow = { workspace = true }
 
 [features]
 default = ["tokio"]
-tokio = ["dep:tokio", "dep:tokio-util"]
+tokio = ["dep:tokio", "dep:tokio-util", "dep:socket2"]
 jiff = ["dep:jiff"]
 # Video capture (xbmovie PIX! protocol) + `.xbm` decode toolchain.
 capture = []

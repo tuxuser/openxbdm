@@ -65,6 +65,31 @@ xeedee -H 192.168.1.26 file ls DEVKIT:\
 xeedee -H 192.168.1.26 file get DEVKIT:\my-capture.xbm
 ```
 
+### Breakpoint debugging
+
+Register the CLI as the active debugger and leave its notification connection
+running in one terminal:
+
+```text
+xeedee -H 192.168.1.26 debugger --do-override
+```
+
+Set an execution breakpoint from another terminal.  When the notification
+stream reports `break addr=... thread=... stop`, use that thread id to read its
+PowerPC context, then clear the breakpoint and resume the target:
+
+```text
+xeedee -H 192.168.1.26 bp 0x823eef0c
+xeedee -H 192.168.1.26 context 0xf9000014
+xeedee -H 192.168.1.26 bp 0x823eef0c --clear
+xeedee -H 192.168.1.26 go
+```
+
+`context` reads control and integer registers by default; `--fp` and
+`--vector` include the optional floating-point and vector groups.  `stop`,
+`go`, and `continue THREAD [--step]` expose the corresponding XBDM execution
+controls. Only one notification subscriber should be connected at a time.
+
 ## Features
 
 | flag        | what it enables                                              |

@@ -1,0 +1,4 @@
+# xbdm capture v1
+S> 201- connected\r\n
+C> modules\r\n
+S> 202- multiline response follows\r\nname="xboxkrnl.exe" base=0x80040000 size=0x001b0000 check=0x0016b651 timestamp=0x5daa916b pdata=0x8004fa00 psize=0x000063a0 thread=0x00000000 osize=0x001b0000\r\nname="xam.xex" base=0x815f0000 size=0x00610000 check=0x004a9c52 timestamp=0x5daa92a1 pdata=0x81653c00 psize=0x0001af38 dllthread=0x00000000 osize=0x005a0200\r\nname="xbdm.xex" base=0x91000000 size=0x0001f000 check=0x0001e0bb timestamp=0x4f59f205 pdata=0x91004c00 psize=0x00000818 dllthread=0x00000000 osize=0x00021200\r\n.\r\n

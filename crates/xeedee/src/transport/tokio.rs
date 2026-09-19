@@ -25,6 +25,34 @@ use crate::error::TransportError;
 
 pub type TokioTransport = Compat<TcpStream>;
 
+/// A console reboot or crash almost never sends a graceful FIN/RST on an
+/// open XBDM socket, so a bare `TcpStream` read just blocks forever on a
+/// half-dead connection. Enable OS-level TCP keepalive so the kernel probes
+/// the peer and surfaces a read error/EOF within roughly
+/// `KEEPALIVE_IDLE + KEEPALIVE_INTERVAL * KEEPALIVE_RETRIES` (~25s) of the
+/// last real traffic, instead of leaving callers to invent their own
+/// application-level liveness timers.
+const KEEPALIVE_IDLE: Duration = Duration::from_secs(10);
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
+const KEEPALIVE_RETRIES: u32 = 3;
+
+fn apply_keepalive(stream: &TcpStream) -> std::io::Result<()> {
+    let keepalive = socket2::TcpKeepalive::new()
+        .with_time(KEEPALIVE_IDLE)
+        .with_interval(KEEPALIVE_INTERVAL);
+    #[cfg(any(
+        target_os = "android",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "fuchsia",
+        target_os = "illumos",
+        target_os = "linux",
+        target_os = "netbsd",
+    ))]
+    let keepalive = keepalive.with_retries(KEEPALIVE_RETRIES);
+    socket2::SockRef::from(stream).set_tcp_keepalive(&keepalive)
+}
+
 /// Parsed connection target. A [`Target::Addr`] skips DNS entirely; a
 /// [`Target::HostPort`] triggers `tokio`'s built-in resolver.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,6 +139,10 @@ where
         .map_err(Error::from)
         .into_report()
         .attach("configuring TCP_NODELAY on XBDM socket")?;
+    apply_keepalive(&stream)
+        .map_err(Error::from)
+        .into_report()
+        .attach("configuring TCP keepalive on XBDM socket")?;
     Ok(stream.compat())
 }
 
