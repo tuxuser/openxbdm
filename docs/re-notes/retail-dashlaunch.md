@@ -25,10 +25,9 @@ Verified from two contexts:
   `XexLoadImage(path, XEX_LOADIMG_FLAG_DLL, 0, NULL)`).
 
 Both give the identical status. The ordinal resolves
-(`XexGetProcedureAddress` succeeds) and other `ExDebugMonitorService`
-services are not excluded by this result, but service 0 specifically is
-not implemented as a callable system service in this kernel build,
-independent of the caller's privilege or module type. **Consequence:**
+(`XexGetProcedureAddress` succeeds). The export is a stub that returns
+`0xC000001C` for every service number, independent of the caller's
+privilege or module type; see "Kernel image analysis". **Consequence:**
 `register_debug_monitor`/`debug_monitor_data()` and everything that reads
 the kernel-maintained data block through them (module list, loader lock,
 title/system process objects -- `debugger.rs`, `memory.rs`,
@@ -243,3 +242,61 @@ command-line tools took three fixes that are easy to miss:
 - The DLL link needs `/ALIGN:128,4096` (section:file) for `imagexex.exe`
   to accept the result at all; without it the same misleading alignment
   error appears regardless of the base address chosen.
+
+## Kernel image analysis (kernel 2.0.17559.0)
+
+Read from a live `getmem` dump of `0x80000000..0x801f0000` (read-only; the
+range below `0x80040000` is not code). `xboxkrnl.exe` PE image base is
+`0x80040000`; addresses below come from its export table and are
+build-specific.
+
+| Export | Ordinal | Address | Body |
+|---|---:|---|---|
+| `ExDebugMonitorService` | 426 | `0x8007bb68` | `lis r3,0xC000; ori r3,r3,0x1c; blr`: fails every service number |
+| profiler enable | 669 | `0x80071b60` | `li r3,1; blr` |
+| profiler stop/set routine | 670, 671 | `0x800bab90` | `blr`; both ordinals share one address |
+| `KeDebugMonitorData` | 89 | `0x801a5758` | data word, not code |
+| `setretail` target | 700 | `0x80065768` | real function |
+| `KeSetSpecialPurposeRegister` | 165 | `0x800734cc` | hypervisor call wrapper (`li r0,7; sc`) |
+
+Consequences:
+
+- Services 1, 2, 4, 6, 7 and 8 of `ExDebugMonitorService` fail on this
+  kernel, not only service 0. Service 1 is what fills the debug monitor
+  data block, so the block stays zero.
+- The profiler "enable" export reports success without doing anything and
+  the other two are no-ops. Profiler start succeeds with no samples.
+- The kernel side of `KeDebugMonitorData` is present. Three sites
+  (`0x800860b0`, `0x8014d544`, `0x8014d5ac`) load the pointer and, when it
+  is nonzero, call the routine at block offset `+0x18` with event codes
+  137, 155 and 150. Publishing the block pointer and a dispatcher at `+0x18`
+  is therefore sufficient for those notifications.
+- Kernel text is writable by the plugin: `0x800727dc` reads `60 00 00 00`
+  (the `DebugStepPatch` nop). A stub replacement of the export is possible
+  with the same write method.
+- The module list heads, loader lock, process objects and processor count
+  are kernel globals that service 1 copies. Their addresses are not yet
+  identified. Candidates lie in the debug globals at `0x801a5748..0x801a58e0`.
+
+## Live sweep, console `192.168.42.29` (`xeedee-cli`, read-only)
+
+Falcon, `Krnl=2.0.17559.0`, `openxbdm-dashlaunch.xex` on the HDD, server
+reports `Type=DevKit`, `dmversion` 2.0.21256.0.
+
+| Result | Commands |
+|---|---|
+| Works | `ping`, `dmversion`, `consoletype`, `consolefeatures`, `dbgname`, `altaddr`, `getpid`, `consolemem`, `netaddrs`, `xbeinfo`, `drivelist`, `getconsoleid`, `systeminfo`, `sockets`, `file ls` (`HDD:`, `GAME:`), `getmem`, `walkmem`, `pclist`, `querypc` |
+| Empty (no data block) | `modules`, `threads` |
+| `403 no such module` | `modsections` for `xboxkrnl.exe` and `xam.xex` |
+| `405 no such thread` | `threadinfo`, `isstopped`, `getcontext` |
+| `414 access denied` | `df` on `GAME`, `E`, `HDD`, `DEVKIT` (not isolated) |
+| `406` | `systime` (clock not set) |
+| Reply `OK`, no effect | `dvdeject`: tray did not move |
+
+`dvdeject` calls `HalOpenCloseODDTray` and discards the result, as the
+original does, so the `OK` reply does not show success. Cause not isolated;
+it does not depend on `ExDebugMonitorService`.
+
+Not exercised: `querypc` for `%` counter types (client `--kind` rejects hex),
+breakpoints, `stop`/`go`, `magicboot`, the `counters.rs` per-processor
+blocks.
