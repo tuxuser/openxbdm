@@ -29,3 +29,11 @@ xbox360_module(
     out = "openxbdm-no-rewrite.xex",
     rewrite = False,
 )
+
+# Retail, loaded as a dashlaunch plugin (docs/re-notes/retail-dashlaunch.md).
+xbox360_module(
+    name = "openxbdm-dashlaunch",
+    executable = _MODULE + "-dashlaunch-bin",
+    manifest = "xex-dashlaunch.toml",
+    out = "openxbdm-dashlaunch.xex",
+)

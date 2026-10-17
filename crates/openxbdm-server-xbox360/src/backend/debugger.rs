@@ -357,6 +357,10 @@ impl Slot {
 static SLOTS: [Slot; SLOT_COUNT] = [const { Slot::new() }; SLOT_COUNT];
 /// Debug routine the kernel had before the hook.
 static PREVIOUS_DEBUG_ROUTINE: AtomicU32 = AtomicU32::new(0);
+/// `dashlaunch` feature only: the single-step patch address and instruction
+/// [`dashlaunch::enable_single_step`] replaced, to restore at `uninstall`.
+#[cfg(feature = "dashlaunch")]
+static SINGLE_STEP_PATCH: [AtomicU32; 2] = [const { AtomicU32::new(0) }; 2];
 /// Thread object of the server thread, which must never wait in a slot.
 static SERVER_THREAD: AtomicU32 = AtomicU32::new(0);
 /// Thread notification registration: routine, then the kernel's links.
@@ -902,22 +906,57 @@ extern "C" fn thread_notification(_registration: u32, thread_object: u32, create
 /// register for thread notifications (stock 0x91f3bc38 and the thread
 /// notification registration in 0x91f32628). Call once after the debug
 /// monitor data is available.
+///
+/// `dashlaunch` feature: `ExDebugMonitorService` registration is
+/// unavailable on the retail kernel builds checked so far
+/// (`docs/re-notes/retail-dashlaunch.md`), but this still tries it first
+/// (`kernel::debug_monitor_data()` word 0 nonzero means it worked) in case
+/// a future or different kernel build supports it, and only falls back to
+/// dashlaunch's `ldata` when it did not. There is no retail source yet for
+/// the kernel's stack-overflow notification pointer
+/// (`debug_monitor_data()` word `0x16`) -- [`stack_overflow_entry`] is
+/// hooked only when registration succeeded.
 pub(crate) fn install() {
     let data = kernel::debug_monitor_data();
     let routine_variable = data.words[0];
-    if routine_variable != 0 && PREVIOUS_DEBUG_ROUTINE.load(Ordering::Relaxed) == 0 {
-        PREVIOUS_DEBUG_ROUTINE.store(read_u32(routine_variable), Ordering::Release);
-        write_u32(
-            routine_variable,
-            debug_routine_entry as *const () as usize as u32,
-        );
+    if routine_variable != 0 {
+        if PREVIOUS_DEBUG_ROUTINE.load(Ordering::Relaxed) == 0 {
+            PREVIOUS_DEBUG_ROUTINE.store(read_u32(routine_variable), Ordering::Release);
+            write_u32(
+                routine_variable,
+                debug_routine_entry as *const () as usize as u32,
+            );
+        }
+        let overflow_variable = data.words[0x16];
+        if overflow_variable != 0 {
+            write_u32(
+                overflow_variable,
+                stack_overflow_entry as *const () as usize as u32,
+            );
+        }
     }
-    let overflow_variable = data.words[0x16];
-    if overflow_variable != 0 {
-        write_u32(
-            overflow_variable,
-            stack_overflow_entry as *const () as usize as u32,
-        );
+    #[cfg(feature = "dashlaunch")]
+    if routine_variable == 0 {
+        if SINGLE_STEP_PATCH[0].load(Ordering::Relaxed) == 0
+            && let Some((address, previous)) = crate::dashlaunch::enable_single_step()
+        {
+            SINGLE_STEP_PATCH[0].store(address, Ordering::Relaxed);
+            SINGLE_STEP_PATCH[1].store(previous, Ordering::Relaxed);
+        }
+        match crate::dashlaunch::debug_routine_variable() {
+            Some(routine_variable) if routine_variable != 0 => {
+                if PREVIOUS_DEBUG_ROUTINE.load(Ordering::Relaxed) == 0 {
+                    PREVIOUS_DEBUG_ROUTINE.store(read_u32(routine_variable), Ordering::Release);
+                    write_u32(
+                        routine_variable,
+                        debug_routine_entry as *const () as usize as u32,
+                    );
+                }
+            }
+            _ => kernel::debug_print(
+                c"openxbdm: dashlaunch ldata not found, exception hook not installed\n",
+            ),
+        }
     }
     THREAD_NOTIFICATION[0].store(
         thread_notification_entry as *const () as usize as u32,
@@ -933,25 +972,42 @@ pub(crate) fn uninstall() {
         THREAD_NOTIFICATION[0].store(0, Ordering::Relaxed);
     }
     let data = kernel::debug_monitor_data();
-    let overflow_variable = data.words[0x16];
-    if overflow_variable != 0 {
-        // SAFETY: the kernel's word-aligned notification pointer.
-        let slot = unsafe { AtomicU32::from_ptr(overflow_variable as usize as *mut u32) };
-        let _ = slot.compare_exchange(
-            stack_overflow_entry as *const () as usize as u32,
-            0,
-            Ordering::AcqRel,
-            Ordering::Relaxed,
-        );
-    }
     let routine_variable = data.words[0];
-    if routine_variable != 0
-        && read_u32(routine_variable) == debug_routine_entry as *const () as usize as u32
-    {
-        write_u32(
-            routine_variable,
-            PREVIOUS_DEBUG_ROUTINE.swap(0, Ordering::AcqRel),
-        );
+    if routine_variable != 0 {
+        let overflow_variable = data.words[0x16];
+        if overflow_variable != 0 {
+            // SAFETY: the kernel's word-aligned notification pointer.
+            let slot = unsafe { AtomicU32::from_ptr(overflow_variable as usize as *mut u32) };
+            let _ = slot.compare_exchange(
+                stack_overflow_entry as *const () as usize as u32,
+                0,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            );
+        }
+        if read_u32(routine_variable) == debug_routine_entry as *const () as usize as u32 {
+            write_u32(
+                routine_variable,
+                PREVIOUS_DEBUG_ROUTINE.swap(0, Ordering::AcqRel),
+            );
+        }
+    }
+    #[cfg(feature = "dashlaunch")]
+    if routine_variable == 0 {
+        if let Some(routine_variable) = crate::dashlaunch::debug_routine_variable()
+            && routine_variable != 0
+            && read_u32(routine_variable) == debug_routine_entry as *const () as usize as u32
+        {
+            write_u32(
+                routine_variable,
+                PREVIOUS_DEBUG_ROUTINE.swap(0, Ordering::AcqRel),
+            );
+        }
+        let address = SINGLE_STEP_PATCH[0].swap(0, Ordering::Relaxed);
+        if address != 0 {
+            let previous = SINGLE_STEP_PATCH[1].swap(0, Ordering::Relaxed);
+            crate::dashlaunch::restore_single_step(address, previous);
+        }
     }
 }
 

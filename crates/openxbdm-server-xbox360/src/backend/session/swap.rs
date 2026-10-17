@@ -34,8 +34,16 @@ struct Chain {
 }
 
 impl Chain {
+    /// A zero slot address means the debug monitor data block was never
+    /// populated (`dashlaunch` feature: no retail source yet,
+    /// `docs/re-notes/retail-dashlaunch.md`); leaves `installed` false, so
+    /// callers keep retrying harmlessly and nothing else writes through
+    /// address 0.
     fn install(&mut self) {
         let kernel_slot = kernel::debug_monitor_data().words[SWAP_SLOT_WORD];
+        if kernel_slot == 0 {
+            return;
+        }
         self.replaced = read_u32(kernel_slot);
         write_u32(kernel_slot, dispatch_entry as *const () as usize as u32);
         self.installed = true;

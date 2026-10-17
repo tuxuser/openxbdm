@@ -1,0 +1,37 @@
+# XEX metadata for a dashlaunch-loaded retail build
+# (docs/re-notes/retail-dashlaunch.md). Differs from xex.toml (the devkit
+# flash-replacement build):
+#
+# - No bounding_path: dashlaunch's `dlaunchStartSysModule`/`[Plugins]`
+#   loading (XexLoadImage flag 8) has no bounding-path check, unlike XAM's
+#   bare-name xbdm.xex search.
+# - `encrypt = "retail"`, not "devkit": `xex-link` only supports the two
+#   keyed modes (no "none"/unencrypted variant exists, unlike Microsoft's
+#   own `imagexex.exe`, a different tool with a different manifest schema
+#   that this project does not use). The hardware probe that validated the
+#   rest of this file's choices (retail-dashlaunch.md) used an *unencrypted*
+#   image built with `imagexex.exe` directly, not through `xex-link`, so
+#   `encrypt = "retail"` here is the closest equivalent but is NOT itself
+#   verified on hardware yet -- confirm a `dlaunchStartSysModule` load with
+#   this exact manifest before relying on it.
+# - Same load address as xex.toml (0x91f00000, stock XBDM's own address):
+#   correct when this module replaces the console's debug monitor, as
+#   intended. It will conflict (XexLoadImage fails with
+#   STATUS_CONFLICTING_ADDRESSES) if something else is already resident
+#   there, such as a devkit-style kernel debug session running alongside
+#   dashlaunch on the same console -- not expected on a plain retail boot.
+load_address = 0x91f00000
+version = "2.0.21256.0"
+base_version = "2.0.21256.0"
+image_flags = ["SMALL_PAGES"]
+module_flags = ["EXPORTS_TO_TITLE", "SYSTEM_DEBUGGER", "DLL"]
+compress = true
+encrypt = "retail"
+
+[imports]
+version = "2.0.21256.0"
+min_version = "2.0.1861.0"
+
+[exports]
+module = "xbdm.xex"
+min_version = "2.0.1861.0"

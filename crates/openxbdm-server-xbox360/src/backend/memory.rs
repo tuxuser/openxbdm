@@ -190,16 +190,27 @@ struct LoaderLock {
 }
 
 impl LoaderLock {
+    /// A zero lock address means the debug monitor data block was never
+    /// populated (`dashlaunch` feature: no retail source yet,
+    /// `docs/re-notes/retail-dashlaunch.md`); the lists it would guard are
+    /// then already empty (zero heads), so take no lock rather than spin
+    /// on address 0.
     fn acquire() -> Self {
         let lock = kernel::debug_monitor_data().loader_lock();
-        let irql = kernel::KfAcquireSpinLock(lock as usize as *mut u32);
+        let irql = if lock != 0 {
+            kernel::KfAcquireSpinLock(lock as usize as *mut u32)
+        } else {
+            0
+        };
         Self { lock, irql }
     }
 }
 
 impl Drop for LoaderLock {
     fn drop(&mut self) {
-        kernel::KfReleaseSpinLock(self.lock as usize as *mut u32, self.irql);
+        if self.lock != 0 {
+            kernel::KfReleaseSpinLock(self.lock as usize as *mut u32, self.irql);
+        }
     }
 }
 

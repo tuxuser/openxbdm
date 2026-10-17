@@ -331,6 +331,7 @@ fn open_listener() -> Result<u16, StudioError> {
     if socket == INVALID_SOCKET {
         return Err(StudioError::Fail);
     }
+    net::mark_insecure(socket);
     let socket = SocketId(socket);
     let Some(port) = configure_listener(socket) else {
         close_socket(socket);

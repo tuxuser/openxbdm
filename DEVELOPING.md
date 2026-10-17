@@ -169,6 +169,7 @@ standard library overlay. `xbox360/BUCK` builds the module from it:
 | `//xbox360:openxbdm` | `openxbdm.xex`, for the kd host |
 | `//xbox360:openxbdm-boot-guard` | `openxbdm-boot-guard.xex`, with the `boot-guard` feature, for `DEVKIT:\FlashEx` |
 | `//xbox360:openxbdm-no-rewrite` | `openxbdm-no-rewrite.xex`, without the save and restore rewrite |
+| `//xbox360:openxbdm-dashlaunch` | `openxbdm-dashlaunch.xex`, with the `dashlaunch` feature, loaded as a dashlaunch plugin on retail (`docs/re-notes/retail-dashlaunch.md`) |
 
 Console crates are built for size (`toolchains/BUCK`): `-Copt-level=z`,
 one code generation unit, `-Cpanic=immediate-abort`, and `-Clto=fat` for
@@ -268,6 +269,25 @@ entry point), or you installed a build without the boot guard, start
 `openxbdm-kd host --file` serving a working module for the same path and
 restart the console; that module deletes the file once its server starts.
 Each installation covers one boot; repeat steps 2 to 4 for the next one.
+
+### dashlaunch plugin (retail)
+
+Retail loading goes through dashlaunch, not FlashEx; see
+`docs/re-notes/retail-dashlaunch.md` for the hardware evidence behind this.
+Build `//xbox360:openxbdm-dashlaunch` and either:
+
+- add it to `launch.ini`'s `[Plugins]` section (`plugin1=Drive:\path\to\openxbdm-dashlaunch.xex`),
+  loaded at every dashlaunch startup, or
+- call dashlaunch's `dlaunchStartSysModule` (`launch.xex` export 2) with a
+  full device path at runtime, which loads it immediately without a
+  reboot and returns the real `XexLoadImage` status.
+
+The module must build with the `dashlaunch` feature (not `boot-guard`; the
+two are mutually exclusive deployment models and the crate refuses to
+build both in). `xex-dashlaunch.toml`'s load address (`0x91f00000`, stock
+XBDM's own) assumes nothing else is already resident there; a collision
+fails the load with `STATUS_CONFLICTING_ADDRESSES` rather than doing
+something silently wrong.
 
 ## Differential testing
 

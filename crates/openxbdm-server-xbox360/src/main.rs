@@ -8,6 +8,8 @@ fn main() {
 
 #[cfg(target_arch = "powerpc")]
 mod backend;
+#[cfg(all(target_arch = "powerpc", feature = "dashlaunch"))]
+mod dashlaunch;
 #[cfg(target_arch = "powerpc")]
 mod exports;
 #[cfg(target_arch = "powerpc")]
@@ -18,6 +20,8 @@ mod lockfree;
 mod net;
 #[cfg(all(target_arch = "powerpc", feature = "smb"))]
 mod smb;
+#[cfg(target_arch = "powerpc")]
+mod trace;
 
 #[cfg(target_arch = "powerpc")]
 mod xbox360 {
@@ -26,6 +30,7 @@ mod xbox360 {
     use core::sync::atomic::AtomicU32;
     use core::sync::atomic::Ordering;
 
+    #[cfg(not(feature = "dashlaunch"))]
     use openxbdm_core::status::KernelError;
     use openxbdm_core::status::NtStatus;
     use openxbdm_server::ConnectionIndex;
@@ -39,12 +44,15 @@ mod xbox360 {
 
     use crate::backend::Console;
     use crate::kernel;
+    #[cfg(not(feature = "dashlaunch"))]
     use crate::kernel::AnsiString;
+    #[cfg(not(feature = "dashlaunch"))]
     use crate::kernel::ObjectAttributes;
     use crate::net;
     use crate::net::FdSet;
     use crate::net::INVALID_SOCKET;
     use crate::net::TimeVal;
+    #[cfg(not(feature = "dashlaunch"))]
     use crate::net::XNCALLER_XBDM;
     use crate::net::XamNetwork;
 
@@ -83,6 +91,14 @@ mod xbox360 {
         SHUTDOWN.store(true, Ordering::SeqCst);
     }
 
+    #[cfg(all(feature = "dashlaunch", feature = "boot-guard"))]
+    compile_error!(
+        "dashlaunch (retail, loaded as a plugin) and boot-guard (devkit, \
+         loaded from DEVKIT:\\FlashEx) are different deployment models \
+         and cannot both be built in"
+    );
+
+    #[cfg(not(feature = "dashlaunch"))]
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Removal {
         Removed,
@@ -93,9 +109,12 @@ mod xbox360 {
     // XAM loads xbdm.xex with the system-root-only flag. The kernel still
     // searches \FlashEx\ before \SystemRoot\ and accepts a module there whose
     // bounding path names that file, so this file replaces the flash XBDM
-    // until it is removed.
+    // until it is removed. Devkit-only: a dashlaunch plugin is loaded
+    // directly (docs/re-notes/retail-dashlaunch.md), not through this path.
+    #[cfg(not(feature = "dashlaunch"))]
     const OVERRIDE_MODULE_PATH: &[u8] = br"\Device\Harddisk0\Partition1\DEVKIT\FlashEx\xbdm.xex";
 
+    #[cfg(not(feature = "dashlaunch"))]
     fn delete_file(path: &[u8]) -> Removal {
         let name = AnsiString::new(path);
         let attributes = ObjectAttributes {
@@ -116,17 +135,37 @@ mod xbox360 {
 
     // Startup work and rare paths stay out of line: a frame inlined into
     // the server loop would stay allocated under every command.
+    //
+    // `dashlaunch` feature: XAM/dashlaunch has already brought the title
+    // network up by the time a plugin loads, and calling `XNetStartup`
+    // again here fails with `WSAEINVAL` (10022), verified on hardware
+    // (`docs/re-notes/retail-dashlaunch.md`) -- the server thread then
+    // spun in this function's retry loop forever, never reaching
+    // `net::listen`. `xbdm-nate`'s devkit/JTAG code never calls
+    // `XNetStartup`/`WSAStartup` either, for the same reason.
     #[inline(never)]
     fn initialize_network() -> bool {
-        let mut startup = [0u8; 13];
-        startup[0] = 0x0d;
-        startup[1] = 0x81;
-        startup[4] = 0x40;
-        if net::NetDll_XNetStartup(XNCALLER_XBDM, startup.as_ptr()) != 0 {
-            return false;
+        #[cfg(feature = "dashlaunch")]
+        {
+            crate::trace::trace!("initialize_network: skipped (dashlaunch)");
+            true
         }
-        let mut wsa_data = [0u8; 512];
-        net::NetDll_WSAStartup(XNCALLER_XBDM, 2, wsa_data.as_mut_ptr()) == 0
+        #[cfg(not(feature = "dashlaunch"))]
+        {
+            let mut startup = [0u8; 13];
+            startup[0] = 0x0d;
+            startup[1] = 0x81;
+            startup[4] = 0x40;
+            let xnet_result = net::NetDll_XNetStartup(XNCALLER_XBDM, startup.as_ptr());
+            crate::trace::trace!("initialize_network: XNetStartup = {xnet_result}");
+            if xnet_result != 0 {
+                return false;
+            }
+            let mut wsa_data = [0u8; 512];
+            let wsa_result = net::NetDll_WSAStartup(XNCALLER_XBDM, 2, wsa_data.as_mut_ptr());
+            crate::trace::trace!("initialize_network: WSAStartup = {wsa_result}");
+            wsa_result == 0
+        }
     }
 
     fn close_listener() {
@@ -256,6 +295,7 @@ mod xbox360 {
     }
 
     fn run_server() {
+        crate::trace::trace!("run_server: entered");
         while !initialize_network() {
             if shutting_down() {
                 return;
@@ -263,6 +303,7 @@ mod xbox360 {
             kernel::debug_print(c"openxbdm: network initialization failed\n");
             kernel::sleep_milliseconds(1000);
         }
+        crate::trace::trace!("run_server: network initialized");
 
         // Stock initializes the studio subsystem last, once the network runs.
         crate::backend::performance::studio::initialize();
@@ -271,13 +312,16 @@ mod xbox360 {
         // From here on the server thread takes queued requests until it
         // stops: in its passes, and between listen attempts.
         let Some((server, console)) = crate::backend::dispatcher::begin_serving() else {
+            crate::trace::trace!("run_server: begin_serving returned None, exiting");
             return;
         };
+        crate::trace::trace!("run_server: begin_serving succeeded");
         #[cfg(feature = "smb")]
         crate::smb::open(console);
         while !shutting_down() {
             let Ok(listener) = net::listen(XBDM_PORT, LISTEN_BACKLOG) else {
                 kernel::debug_print(c"openxbdm: listen failed\n");
+                crate::trace::trace!("run_server: listen failed");
                 for _ in 0..LISTEN_RETRY_STEPS {
                     if shutting_down() {
                         break;
@@ -292,6 +336,7 @@ mod xbox360 {
                 break;
             }
             kernel::debug_print(c"openxbdm: listening on TCP port 730\n");
+            crate::trace::trace!("run_server: listening on TCP port 730");
             let discovery = net::bind_datagram(XBDM_PORT).ok();
             serve(server, console, &mut network, listener, discovery);
             if let Some(discovery) = discovery {
@@ -324,6 +369,7 @@ mod xbox360 {
     }
 
     /// Remove the override, retrying while the file system is not ready.
+    #[cfg(not(feature = "dashlaunch"))]
     #[inline(never)]
     fn remove_override_module() -> Removal {
         let mut removal = delete_file(OVERRIDE_MODULE_PATH);
@@ -343,14 +389,17 @@ mod xbox360 {
     }
 
     extern "C" fn server_thread(_context: u32) -> u32 {
+        crate::trace::trace!("server_thread: entered");
         // Recorded first: debug prints and calls from this thread must
         // never wait for the server.
         crate::backend::debugger::set_server_thread();
         crate::backend::dispatcher::create_host();
+        #[cfg(not(feature = "dashlaunch"))]
         remove_override_module();
         if !shutting_down() {
             run_server();
         }
+        crate::trace::trace!("server_thread: exiting");
         stop_server_services();
         kernel::ExTerminateThread(0);
         loop {
@@ -381,6 +430,7 @@ mod xbox360 {
     extern "C" fn module_entry(module: u32, reason: u32, _reserved: u32) -> u32 {
         match reason {
             0 => {
+                crate::trace::trace!("module_entry: reason=0, unloading");
                 SHUTDOWN.store(true, Ordering::SeqCst);
                 close_listener();
                 #[cfg(feature = "smb")]
@@ -398,9 +448,13 @@ mod xbox360 {
                 crate::backend::performance::shut_down();
                 crate::backend::dispatcher::wait_for_callers();
                 crate::backend::debugger::wait_for_event_waiters();
+                crate::trace::trace!("module_entry: reason=0 done");
+                crate::trace::close();
                 1
             }
             1 => {
+                crate::trace::open();
+                crate::trace::trace!("module_entry: reason=1, module=0x{module:08X}");
                 // The recovery installs nothing, refuses every export, and
                 // never waits on the loader thread.
                 #[cfg(feature = "boot-guard")]
@@ -409,20 +463,41 @@ mod xbox360 {
                     return start_thread(recovery_thread).map_or(0, |()| 1);
                 }
                 crate::backend::dispatcher::initialize_host();
-                if !kernel::register_debug_monitor(module) {
+                // `ExDebugMonitorService` registration is unavailable on
+                // the retail kernel builds checked so far
+                // (docs/re-notes/retail-dashlaunch.md). The `dashlaunch`
+                // feature still tries it (in case a future or different
+                // kernel build supports it) but falls back to dashlaunch's
+                // `ldata` instead of failing when it does not;
+                // `debugger::install()` makes that choice at runtime.
+                let registered = kernel::register_debug_monitor(module);
+                crate::trace::trace!("module_entry: register_debug_monitor = {registered}");
+                #[cfg(not(feature = "dashlaunch"))]
+                if !registered {
                     kernel::debug_print(c"openxbdm: debug monitor registration failed\n");
                     return 0;
                 }
+                #[cfg(feature = "dashlaunch")]
+                let _ = registered;
                 crate::backend::debugger::install();
+                crate::trace::trace!("module_entry: debugger::install done");
                 crate::backend::network::xhttpproxy::initialize();
+                crate::trace::trace!("module_entry: xhttpproxy::initialize done");
                 crate::backend::session::initialize();
+                crate::trace::trace!("module_entry: session::initialize done");
                 crate::backend::hardware::initialize();
+                crate::trace::trace!("module_entry: hardware::initialize done");
                 crate::backend::dispatcher::install();
+                crate::trace::trace!("module_entry: dispatcher::install done");
                 crate::backend::performance::initialize();
+                crate::trace::trace!("module_entry: performance::initialize done");
                 crate::backend::memory::initialize();
+                crate::trace::trace!("module_entry: memory::initialize done");
                 // The hooks above point into the image, so it stays loaded
                 // without a server; calls and events take their defaults.
-                if start_thread(server_thread).is_err() {
+                let started = start_thread(server_thread);
+                crate::trace::trace!("module_entry: start_thread = {}", started.is_ok());
+                if started.is_err() {
                     stop_server_services();
                 }
                 1

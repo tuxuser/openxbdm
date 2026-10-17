@@ -794,9 +794,15 @@ impl capture::Engine for Engine {
     /// Stock 0x91f28ae0: the first loader list only, under the loader lock.
     fn instrumented(&mut self, kind: Instrumentation) -> bool {
         let data = kernel::debug_monitor_data();
-        let lock = data.loader_lock() as usize as *mut u32;
-        let irql = kernel::KfAcquireSpinLock(lock);
         let head = data.module_list();
+        // A zero list head means the debug monitor data block was never
+        // populated (`dashlaunch` feature: no retail source yet); nothing
+        // to walk.
+        if head == 0 {
+            return false;
+        }
+        let lock = data.loader_lock() as usize as *mut u32;
+        let irql = (!lock.is_null()).then(|| kernel::KfAcquireSpinLock(lock));
         let mut entry = read(head);
         let mut found = false;
         while entry != head {
@@ -807,7 +813,9 @@ impl capture::Engine for Engine {
             }
             entry = read(entry);
         }
-        kernel::KfReleaseSpinLock(lock, irql);
+        if let Some(irql) = irql {
+            kernel::KfReleaseSpinLock(lock, irql);
+        }
         found
     }
 

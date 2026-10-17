@@ -9,8 +9,17 @@ use openxbdm_server::network::SocketId;
 use crate::kernel::LIB_XAM;
 use crate::kernel::import_thunk;
 
-/// Caller identifier the monitor passes to network functions.
+/// Caller identifier the monitor passes to network functions. Retail
+/// (`dashlaunch` feature): caller 3 ("XBDM") was never initialized by
+/// anyone (`NetDll_socket` fails `WSANOTINITIALISED`, 10093, and
+/// `NetDll_XNetStartup` itself fails `WSAEINVAL`, 10022, verified on
+/// hardware, `docs/re-notes/retail-dashlaunch.md`); reuse caller 2, the
+/// title/system network XAM/dashlaunch already brought up, matching
+/// `xbdm-nate`'s `DMNETWORK` (`dmnet.h`).
+#[cfg(not(feature = "dashlaunch"))]
 pub const XNCALLER_XBDM: u32 = 3;
+#[cfg(feature = "dashlaunch")]
+pub const XNCALLER_XBDM: u32 = 2;
 pub const INVALID_SOCKET: u32 = u32::MAX;
 pub(crate) const SOCKET_ERROR: i32 = -1;
 pub(crate) const AF_INET: u32 = 2;
@@ -18,6 +27,18 @@ const SOCK_STREAM: u32 = 1;
 const IPPROTO_TCP: u32 = 6;
 pub(crate) const SOL_SOCKET: i32 = 0xffff;
 const SO_REUSEADDR: i32 = 4;
+/// Marks a socket as not using the secure (Xbox Live) channel. Retail
+/// (`dashlaunch` feature) only, verified on hardware
+/// (`docs/re-notes/retail-dashlaunch.md`): without this, a loopback
+/// connection to the listener worked but a peer elsewhere on the LAN got
+/// no response (connection timed out, not refused); with it, both work,
+/// including a real XBDM client (`xeedee`). Consistent with the
+/// title-network caller (ID 2) being subject to the secure-channel
+/// requirement that devkit XBDM's separate debug network interface
+/// (`XNetGetDebugXnAddr`) is not. `xbdm-nate`'s JTAG-era server sets the
+/// same option (`SO_DECRYPTSOCK`, `dmnet.h`) before listening.
+#[cfg(feature = "dashlaunch")]
+const SO_DECRYPTSOCK: i32 = 0x5801;
 const FIONBIO: u32 = 0x8004_667e;
 const FIONREAD: u32 = 0x4004_667f;
 const WSAEWOULDBLOCK: i32 = 10035;
@@ -188,38 +209,75 @@ pub fn select(
     }
 }
 
+/// See [`SO_DECRYPTSOCK`]. A no-op outside the `dashlaunch` feature.
+pub fn mark_insecure(#[cfg_attr(not(feature = "dashlaunch"), allow(unused))] socket: u32) {
+    #[cfg(feature = "dashlaunch")]
+    {
+        let enable = 1u32.to_be_bytes();
+        NetDll_setsockopt(
+            XNCALLER_XBDM,
+            socket,
+            SOL_SOCKET,
+            SO_DECRYPTSOCK,
+            enable.as_ptr(),
+            enable.len() as i32,
+        );
+    }
+}
+
 /// Open a listening TCP socket on `port` with address reuse, as the monitor's
 /// command thread does.
 pub fn listen(port: u16, backlog: i32) -> Result<u32, NetError> {
     let socket = NetDll_socket(XNCALLER_XBDM, AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    crate::trace::trace!(
+        "net::listen: socket = 0x{socket:08X} (err={})",
+        NetDll_WSAGetLastError(XNCALLER_XBDM)
+    );
     if socket == INVALID_SOCKET {
         return Err(NetError::Exhausted);
     }
+    mark_insecure(socket);
     let enable = 1u32.to_be_bytes();
     let address = SockAddrIn::new(Endpoint {
         address: Ipv4Address::UNSPECIFIED,
         port,
     });
-    if NetDll_setsockopt(
+    let setsockopt_result = NetDll_setsockopt(
         XNCALLER_XBDM,
         socket,
         SOL_SOCKET,
         SO_REUSEADDR,
         enable.as_ptr(),
         enable.len() as i32,
-    ) == SOCKET_ERROR
-        || NetDll_bind(
+    );
+    crate::trace::trace!(
+        "net::listen: setsockopt = {setsockopt_result} (err={})",
+        NetDll_WSAGetLastError(XNCALLER_XBDM)
+    );
+    if setsockopt_result != SOCKET_ERROR {
+        let bind_result = NetDll_bind(
             XNCALLER_XBDM,
             socket,
             (&address as *const SockAddrIn).cast(),
             size_of::<SockAddrIn>() as i32,
-        ) == SOCKET_ERROR
-        || NetDll_listen(XNCALLER_XBDM, socket, backlog) == SOCKET_ERROR
-    {
-        NetDll_closesocket(XNCALLER_XBDM, socket);
-        return Err(NetError::Closed);
+        );
+        crate::trace::trace!(
+            "net::listen: bind = {bind_result} (err={})",
+            NetDll_WSAGetLastError(XNCALLER_XBDM)
+        );
+        if bind_result != SOCKET_ERROR {
+            let listen_result = NetDll_listen(XNCALLER_XBDM, socket, backlog);
+            crate::trace::trace!(
+                "net::listen: listen = {listen_result} (err={})",
+                NetDll_WSAGetLastError(XNCALLER_XBDM)
+            );
+            if listen_result != SOCKET_ERROR {
+                return Ok(socket);
+            }
+        }
     }
-    Ok(socket)
+    NetDll_closesocket(XNCALLER_XBDM, socket);
+    Err(NetError::Closed)
 }
 
 pub fn accept(listener: u32) -> Option<u32> {
@@ -239,6 +297,7 @@ pub fn bind_datagram(port: u16) -> Result<u32, NetError> {
     if socket == INVALID_SOCKET {
         return Err(NetError::Exhausted);
     }
+    mark_insecure(socket);
     let enable = 1u32.to_be_bytes();
     NetDll_setsockopt(
         XNCALLER_XBDM,

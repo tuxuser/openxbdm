@@ -819,6 +819,12 @@ fn hook() {
         write_u32(hook_slot[0], trace_hook_entry as *const () as usize as u32);
     }
     let slot = kernel::debug_monitor_data().words[0];
+    // A zero slot means the debug monitor data block was never populated
+    // (`dashlaunch` feature: no retail source yet, read/write address 0
+    // otherwise); `unhook` mirrors this check.
+    if slot == 0 {
+        return;
+    }
     ROUTINE_SLOT.store(slot, Ordering::Release);
     let routine = debug_routine_entry as *const () as usize as u32;
     let previous = read_u32(slot);

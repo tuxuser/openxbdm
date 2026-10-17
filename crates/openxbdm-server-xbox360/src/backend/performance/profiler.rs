@@ -754,7 +754,11 @@ struct FunctionTable {
 fn copy_function_tables(tables: &mut [FunctionTable; MODULE_CAPACITY]) -> Option<usize> {
     let data = kernel::debug_monitor_data();
     let lock = data.loader_lock() as usize as *mut u32;
-    let irql = kernel::KfAcquireSpinLock(lock);
+    // A zero lock address means the debug monitor data block was never
+    // populated (`dashlaunch` feature: no retail source yet); the list
+    // heads below are then also zero, so take no lock rather than spin on
+    // address 0.
+    let irql = (!lock.is_null()).then(|| kernel::KfAcquireSpinLock(lock));
     let mut count = 0;
     let mut result = Some(0);
     'lists: for &head in &[data.module_list(), data.secondary_module_list()] {
@@ -811,7 +815,9 @@ fn copy_function_tables(tables: &mut [FunctionTable; MODULE_CAPACITY]) -> Option
             entry = read_u32(entry);
         }
     }
-    kernel::KfReleaseSpinLock(lock, irql);
+    if let Some(irql) = irql {
+        kernel::KfReleaseSpinLock(lock, irql);
+    }
     result.map(|_| count)
 }
 

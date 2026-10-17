@@ -213,7 +213,11 @@ pub(crate) fn build(executable: &[u8], capture: CaptureFields) -> Option<Snapsho
     );
 
     let lock = data.loader_lock() as usize as *mut u32;
-    let irql = kernel::KfAcquireSpinLock(lock);
+    // A zero lock address means the debug monitor data block was never
+    // populated (`dashlaunch` feature: no retail source yet); the list
+    // heads above are then also zero, so take no lock rather than spin on
+    // address 0.
+    let irql = (!lock.is_null()).then(|| kernel::KfAcquireSpinLock(lock));
     let mut count = 0;
     'lists: for head in lists {
         // Stock reads the second list head without a null check.
@@ -233,7 +237,9 @@ pub(crate) fn build(executable: &[u8], capture: CaptureFields) -> Option<Snapsho
             entry = read_u32(entry);
         }
     }
-    kernel::KfReleaseSpinLock(lock, irql);
+    if let Some(irql) = irql {
+        kernel::KfReleaseSpinLock(lock, irql);
+    }
 
     write_u32(block + 4, count);
     write_u32(
