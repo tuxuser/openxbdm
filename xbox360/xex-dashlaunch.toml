@@ -8,21 +8,20 @@
 # - `encrypt = "retail"`, not "devkit": `xex-link` only supports the two
 #   keyed modes (no "none"/unencrypted variant exists, unlike Microsoft's
 #   own `imagexex.exe`, a different tool with a different manifest schema
-#   that this project does not use). The hardware probe that validated the
-#   rest of this file's choices (retail-dashlaunch.md) used an *unencrypted*
-#   image built with `imagexex.exe` directly, not through `xex-link`, so
-#   `encrypt = "retail"` here is the closest equivalent but is NOT itself
-#   verified on hardware yet -- confirm a `dlaunchStartSysModule` load with
-#   this exact manifest before relying on it.
+#   that this project does not use). The hardware probe that originally
+#   validated this file's other choices (retail-dashlaunch.md) used an
+#   *unencrypted* image built with `imagexex.exe` directly, not through
+#   `xex-link`; `encrypt = "retail"` here has since been confirmed on
+#   hardware too, loaded via `dlaunchStartSysModule` with this exact
+#   manifest.
 # - `load_address = 0x91500000`, not xex.toml's 0x91f00000: dashlaunch's
 #   own `launch.xex` is resident at 0x91f00000 on every retail boot
 #   (confirmed live -- a module list walk found it there, name and all),
-#   so a dashlaunch-loaded module cannot share xex.toml's devkit address
-#   without XexLoadImage failing with STATUS_CONFLICTING_ADDRESSES on
-#   every load, which is what happened here before this was caught.
-#   0x91500000 is a free gap between `hud.xex` and `ximecore.xex`,
-#   confirmed live the same way; see link-dashlaunch.x, which this
-#   manifest's address must keep matching.
+#   so a dashlaunch-loaded module sharing xex.toml's devkit address
+#   fails every load with STATUS_CONFLICTING_ADDRESSES (see
+#   docs/re-notes/nuances.md). 0x91500000 is a free gap between
+#   `hud.xex` and `ximecore.xex`, confirmed live the same way; see
+#   link-dashlaunch.x, which this manifest's address must keep matching.
 load_address = 0x91500000
 version = "2.0.21256.0"
 base_version = "2.0.21256.0"

@@ -796,8 +796,9 @@ impl capture::Engine for Engine {
         let data = kernel::debug_monitor_data();
         let head = data.module_list();
         // A zero list head means the debug monitor data block was never
-        // populated (`dashlaunch` feature: no retail source yet); nothing
-        // to walk.
+        // populated (`register_debug_monitor` never ran, or, under
+        // `dashlaunch`, this kernel build has no retail resolver);
+        // nothing to walk.
         if head == 0 {
             return false;
         }

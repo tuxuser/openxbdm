@@ -905,9 +905,7 @@ struct ModuleListSignature {
 const MODULE_LIST_SIGNATURES: &[ModuleListSignature] = &[ModuleListSignature {
     // `kernel_version()` reads `XboxKrnlVersion` (the kernel image's own
     // build, 17559 here), not `dmversion`'s XBDM build number (21256,
-    // a different thing -- confirmed live the hard way: this table
-    // originally said 21256, which never matched, so the module list
-    // silently stayed unresolved while `threads` worked fine).
+    // a different thing -- see docs/re-notes/nuances.md).
     build: 17559,
     lock_lis_word: 3,
     lock_addi_word: 5,
@@ -1000,8 +998,10 @@ pub fn adopt_module_list_via_xex_pc_to_file_header() -> bool {
 
 /// `KTHREAD.Process` (also `backend::debugger`'s private `thread::PROCESS`,
 /// the same field read from the other direction).
+#[cfg(feature = "dashlaunch")]
 const THREAD_PROCESS: usize = 0x84;
 
+#[cfg(feature = "dashlaunch")]
 fn thread_process(thread: u32) -> u32 {
     // SAFETY: `thread` is a live `KTHREAD` pointer (the calling thread's
     // own, or one this module just created and is waiting on).
@@ -1045,7 +1045,13 @@ extern "C" fn title_process_probe_thread(_context: u32) -> u32 {
         thread_process(current_thread()),
         core::sync::atomic::Ordering::Release,
     );
-    0
+    // `ExCreateThread` with `xapi_thread_startup = 0` (no XAPI wrapper)
+    // does not auto-terminate on return, as `main.rs`'s `server_thread`/
+    // `recovery_thread` also account for.
+    ExTerminateThread(0);
+    loop {
+        core::hint::spin_loop();
+    }
 }
 
 /// `KeTitleProcess`, resolved without any kernel export or per-build

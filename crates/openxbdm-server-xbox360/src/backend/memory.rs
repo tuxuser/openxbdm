@@ -191,10 +191,11 @@ struct LoaderLock {
 
 impl LoaderLock {
     /// A zero lock address means the debug monitor data block was never
-    /// populated (`dashlaunch` feature: no retail source yet,
-    /// `docs/re-notes/retail-dashlaunch.md`); the lists it would guard are
-    /// then already empty (zero heads), so take no lock rather than spin
-    /// on address 0.
+    /// populated (`register_debug_monitor` never ran, or, under the
+    /// `dashlaunch` feature, the running kernel build has no retail
+    /// resolver yet -- `docs/re-notes/retail-dashlaunch.md`); the lists
+    /// it would guard are then already empty (zero heads), so take no
+    /// lock rather than spin on address 0.
     fn acquire() -> Self {
         let lock = kernel::debug_monitor_data().loader_lock();
         let irql = if lock != 0 {

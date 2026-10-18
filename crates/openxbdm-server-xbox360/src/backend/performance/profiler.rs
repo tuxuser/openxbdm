@@ -755,7 +755,8 @@ fn copy_function_tables(tables: &mut [FunctionTable; MODULE_CAPACITY]) -> Option
     let data = kernel::debug_monitor_data();
     let lock = data.loader_lock() as usize as *mut u32;
     // A zero lock address means the debug monitor data block was never
-    // populated (`dashlaunch` feature: no retail source yet); the list
+    // populated (`register_debug_monitor` never ran, or, under
+    // `dashlaunch`, this kernel build has no retail resolver); the list
     // heads below are then also zero, so take no lock rather than spin on
     // address 0.
     let irql = (!lock.is_null()).then(|| kernel::KfAcquireSpinLock(lock));

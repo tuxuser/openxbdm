@@ -37,12 +37,3 @@ xbox360_module(
     manifest = "xex-dashlaunch.toml",
     out = "openxbdm-dashlaunch.xex",
 )
-
-# Temporary: dashlaunch + trace-log, for diagnosing the startup failure
-# recorded in docs/re-notes/retail-dashlaunch.md. Remove once resolved.
-xbox360_module(
-    name = "openxbdm-dashlaunch-trace",
-    executable = _MODULE + "-dashlaunch-trace-bin",
-    manifest = "xex-dashlaunch.toml",
-    out = "openxbdm-dashlaunch-trace.xex",
-)

@@ -70,29 +70,6 @@ xbox360_executable(
 )
 
 xbox360_executable(
-    name = "openxbdm-server-xbox360-dashlaunch-trace-bin",
-    srcs = glob(["Cargo.toml", "src/**"]),
-    crate = "openxbdm_server_xbox360",
-    crate_root = "src/main.rs",
-    edition = "2024",
-    env = ENV | {"CARGO_BIN_NAME": "openxbdm-server-xbox360"},
-    features = [
-        "dashlaunch",
-        "default",
-        "smb",
-        "trace-log",
-    ],
-    deps = [
-        "//crates/openxbdm-core:openxbdm_core",
-        "//crates/openxbdm-server:openxbdm_server",
-    ],
-    visibility = [
-        "PUBLIC",
-    ],
-    link_script = "link-dashlaunch.x",
-)
-
-xbox360_executable(
     name = "openxbdm-server-xbox360-all-features-bin",
     srcs = glob(["Cargo.toml", "src/**"]),
     crate = "openxbdm_server_xbox360",
