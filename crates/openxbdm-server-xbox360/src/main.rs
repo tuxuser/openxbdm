@@ -478,7 +478,16 @@ mod xbox360 {
                     return 0;
                 }
                 #[cfg(feature = "dashlaunch")]
-                let _ = registered;
+                if !registered {
+                    let adopted_modules = kernel::adopt_module_list_via_xex_pc_to_file_header();
+                    crate::trace::trace!(
+                        "module_entry: adopt_module_list_via_xex_pc_to_file_header = {adopted_modules}"
+                    );
+                    let adopted_processes = kernel::adopt_processes_via_thread_probe();
+                    crate::trace::trace!(
+                        "module_entry: adopt_processes_via_thread_probe = {adopted_processes}"
+                    );
+                }
                 crate::backend::debugger::install();
                 crate::trace::trace!("module_entry: debugger::install done");
                 crate::backend::network::xhttpproxy::initialize();

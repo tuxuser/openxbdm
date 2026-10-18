@@ -876,6 +876,222 @@ pub fn set_debug_monitor_word(offset: usize, value: u32) {
     DEBUG_MONITOR_DATA[offset / 4].store(value, core::sync::atomic::Ordering::Release);
 }
 
+/// `ExDebugMonitorService` registration fails unconditionally on every
+/// retail kernel build checked so far (docs/re-notes/retail-dashlaunch.md),
+/// so `debug_monitor_data()` never gets populated and `module_list()`/
+/// `loader_lock()` stay zero. `XexPcToFileHeader` (kernel export 412)
+/// walks the same module list without that registration, materializing
+/// the list head and its spinlock as a `lis`/`addi` pair each in its own
+/// code -- `xbdm-nate`'s technique for reaching an unexported kernel
+/// global through a stable export (`dmmain.c`'s `_resolve()`), re-derived
+/// live against this build rather than its offsets (see
+/// "Calling into the kernel live" in retail-dashlaunch.md). Word offsets
+/// are per kernel build, verified live once each; a build not in this
+/// table is unsupported, not guessed at.
+#[cfg(feature = "dashlaunch")]
+struct ModuleListSignature {
+    /// `kernel_version()[2]`, the build number.
+    build: u16,
+    /// Word index, from `XexPcToFileHeader`'s start, of the `lis`/`addi`
+    /// pair materializing the module-list spinlock address.
+    lock_lis_word: u32,
+    lock_addi_word: u32,
+    /// Same, for the module-list head address.
+    head_lis_word: u32,
+    head_addi_word: u32,
+}
+
+#[cfg(feature = "dashlaunch")]
+const MODULE_LIST_SIGNATURES: &[ModuleListSignature] = &[ModuleListSignature {
+    build: 21256,
+    lock_lis_word: 3,
+    lock_addi_word: 5,
+    head_lis_word: 9,
+    head_addi_word: 11,
+}];
+
+#[cfg(feature = "dashlaunch")]
+const XEX_PC_TO_FILE_HEADER: u32 = 412;
+
+/// Decode `lis rD, imm16` (`addis rD, 0, imm16`). `None` if the opcode
+/// or `rA` does not match.
+#[cfg(feature = "dashlaunch")]
+fn decode_lis(word: u32) -> Option<(u8, u16)> {
+    if word >> 26 != 15 {
+        return None;
+    }
+    let ra = ((word >> 16) & 0x1f) as u8;
+    if ra != 0 {
+        return None;
+    }
+    let rd = ((word >> 21) & 0x1f) as u8;
+    Some((rd, (word & 0xffff) as u16))
+}
+
+/// Decode `addi rD, rA, imm16`. `None` if the opcode does not match.
+#[cfg(feature = "dashlaunch")]
+fn decode_addi(word: u32) -> Option<(u8, u8, i16)> {
+    if word >> 26 != 14 {
+        return None;
+    }
+    let rd = ((word >> 21) & 0x1f) as u8;
+    let ra = ((word >> 16) & 0x1f) as u8;
+    Some((rd, ra, (word & 0xffff) as i16))
+}
+
+/// Read the absolute address a `lis`/`addi` pair at the given word
+/// indices from `function`'s start materializes, verifying both
+/// opcodes and that the `addi` reads the register the `lis` set.
+/// `None` on any mismatch -- a kernel build whose code does not match
+/// the recorded signature must fail loudly, not read whatever is there.
+#[cfg(feature = "dashlaunch")]
+fn read_materialized_address(function: u32, lis_word: u32, addi_word: u32) -> Option<u32> {
+    // SAFETY: `function` is a resolved kernel export's address; reading
+    // its own code as data is how this technique works.
+    let lis_insn = unsafe { core::ptr::read_volatile((function + 4 * lis_word) as *const u32) };
+    let (lis_rd, hi) = decode_lis(lis_insn)?;
+    // SAFETY: as above.
+    let addi_insn = unsafe { core::ptr::read_volatile((function + 4 * addi_word) as *const u32) };
+    let (_, addi_ra, lo) = decode_addi(addi_insn)?;
+    if addi_ra != lis_rd {
+        return None;
+    }
+    Some(((hi as u32) << 16).wrapping_add(lo as i32 as u32))
+}
+
+/// Resolve the module list head and its spinlock by reading them out of
+/// `XexPcToFileHeader`'s own code. `None` when the running kernel build
+/// has no recorded signature, or any step fails.
+#[cfg(feature = "dashlaunch")]
+fn resolve_module_list_via_xex_pc_to_file_header() -> Option<(u32, u32)> {
+    let build = kernel_version()[2];
+    let signature = MODULE_LIST_SIGNATURES.iter().find(|s| s.build == build)?;
+    let xboxkrnl = module_handle(c"xboxkrnl.exe").ok()?;
+    let function = resolve_export(xboxkrnl, XEX_PC_TO_FILE_HEADER).ok()?;
+    let head =
+        read_materialized_address(function, signature.head_lis_word, signature.head_addi_word)?;
+    let lock =
+        read_materialized_address(function, signature.lock_lis_word, signature.lock_addi_word)?;
+    Some((head, lock))
+}
+
+/// Populate the cached debug-monitor data block's module-list head and
+/// spinlock fields from `resolve_module_list_via_xex_pc_to_file_header`,
+/// for retail kernels where `register_debug_monitor` never succeeds.
+/// Leaves `secondary_module_list()` at zero: the list this resolves
+/// already contains every module, kernel and title alike, on the
+/// kernel builds checked so far, and existing consumers already treat
+/// a zero second head as "nothing more to walk". Returns whether it
+/// succeeded.
+#[cfg(feature = "dashlaunch")]
+pub fn adopt_module_list_via_xex_pc_to_file_header() -> bool {
+    let Some((head, lock)) = resolve_module_list_via_xex_pc_to_file_header() else {
+        return false;
+    };
+    set_debug_monitor_word(4, head);
+    set_debug_monitor_word(8, lock);
+    true
+}
+
+/// `KTHREAD.Process` (also `backend::debugger`'s private `thread::PROCESS`,
+/// the same field read from the other direction).
+const THREAD_PROCESS: usize = 0x84;
+
+fn thread_process(thread: u32) -> u32 {
+    // SAFETY: `thread` is a live `KTHREAD` pointer (the calling thread's
+    // own, or one this module just created and is waiting on).
+    unsafe { core::ptr::read_volatile((thread as usize + THREAD_PROCESS) as *const u32) }
+}
+
+/// `KeSystemProcess`, resolved without any kernel export or per-build
+/// address: every thread this module creates, including the one running
+/// this code, belongs to the system process (module flags
+/// `EXPORTS_TO_TITLE` + `SYSTEM_DEBUGGER`, no title-process flag), so the
+/// calling thread's own process already is it.
+#[cfg(feature = "dashlaunch")]
+pub fn system_process() -> u32 {
+    thread_process(current_thread())
+}
+
+#[cfg(feature = "dashlaunch")]
+static TITLE_PROCESS_PROBE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// `ExCreateThread`'s system-process selector bit. `rpc`'s `system`/
+/// `title` flag maps onto exactly this bit in the `0x91f3e630` helper
+/// XBDM itself uses (confirmed live: toggling `rpc`'s flag and reading
+/// the created thread's own `KTHREAD.Process` gave two different, stable
+/// addresses). `ExCreateThread` (kernel ordinal 13) tests the same bit
+/// directly in its own code on this build; disassembly shows no reason
+/// to expect that to be build-specific. See
+/// docs/re-notes/retail-dashlaunch.md, "Calling into the kernel live".
+#[cfg(feature = "dashlaunch")]
+const SYSTEM_PROCESS_THREAD_FLAG: u32 = 0x2;
+
+/// Flags for the transient thread `title_process()` creates: not
+/// debuggable (`0x0400_0000`, same reasoning as `main.rs`'s
+/// `SERVER_THREAD_FLAGS`), and the system-process bit deliberately
+/// clear so the new thread lands in the title process instead.
+#[cfg(feature = "dashlaunch")]
+const TITLE_PROCESS_PROBE_FLAGS: u32 = 0x0400_0000 | 0x81;
+
+#[cfg(feature = "dashlaunch")]
+extern "C" fn title_process_probe_thread(_context: u32) -> u32 {
+    TITLE_PROCESS_PROBE.store(
+        thread_process(current_thread()),
+        core::sync::atomic::Ordering::Release,
+    );
+    0
+}
+
+/// `KeTitleProcess`, resolved without any kernel export or per-build
+/// address the same way `system_process()` resolves `KeSystemProcess`:
+/// create a thread lacking [`SYSTEM_PROCESS_THREAD_FLAG`] and read its
+/// own process once it has run. `None` if thread creation fails or the
+/// probe does not complete within the wait budget.
+#[cfg(feature = "dashlaunch")]
+pub fn title_process() -> Option<u32> {
+    TITLE_PROCESS_PROBE.store(0, core::sync::atomic::Ordering::Release);
+    let mut handle = 0u32;
+    let status = NtStatus(ExCreateThread(
+        &mut handle,
+        0x2000,
+        core::ptr::null_mut(),
+        0,
+        title_process_probe_thread as *const () as usize as u32,
+        0,
+        TITLE_PROCESS_PROBE_FLAGS,
+    ));
+    if status.result().is_err() {
+        return None;
+    }
+    let mut result = None;
+    for _ in 0..50 {
+        let value = TITLE_PROCESS_PROBE.load(core::sync::atomic::Ordering::Acquire);
+        if value != 0 {
+            result = Some(value);
+            break;
+        }
+        sleep_milliseconds(1);
+    }
+    NtClose(handle);
+    result
+}
+
+/// Populate the cached debug-monitor data block's system- and
+/// title-process fields from [`system_process`] and [`title_process`],
+/// for retail kernels where `register_debug_monitor` never succeeds.
+/// Returns whether both resolved.
+#[cfg(feature = "dashlaunch")]
+pub fn adopt_processes_via_thread_probe() -> bool {
+    let system = system_process();
+    set_debug_monitor_word(0x50, system);
+    let Some(title) = title_process() else {
+        return false;
+    };
+    set_debug_monitor_word(0x54, title);
+    true
+}
+
 import_thunk!(
     pub XMsgStartIORequest(app: u32, message: u32, overlapped: u32, buffer: *mut u8, size: u32) -> u32,
     lib = LIB_XAM,

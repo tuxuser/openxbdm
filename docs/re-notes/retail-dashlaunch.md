@@ -300,3 +300,184 @@ it does not depend on `ExDebugMonitorService`.
 Not exercised: `querypc` for `%` counter types (client `--kind` rejects hex),
 breakpoints, `stop`/`go`, `magicboot`, the `counters.rs` per-processor
 blocks.
+
+## `KeDebugMonitorData` is nonzero but the block is entirely zeroed
+
+Live on the same console (kernel 2.0.17559.0, `openxbdm-dashlaunch.xex`
+loaded): `KeDebugMonitorData` at `0x801a5758` (confirmed live by
+disassembling the three call sites named above -- `0x800860b0` contains
+`lis r31,0x801a` / `lwz r11,0x5758(r31)`, landing on exactly this address)
+currently holds `0x915d96c0`, not null. Reading the full `0x68`-byte block
+at that address returns all zero: `module_list()`, `loader_lock()`,
+the dispatcher slot, and `processor_count()` are all `0`. `modules` and
+`threads` are still empty through `xeedee-cli` at the same moment.
+
+Conclusion: a nonzero `KeDebugMonitorData` does not imply a populated
+block or an active monitor on this kernel. Something (most likely a
+kernel boot-time allocation, independent of any module ever calling
+`ExDebugMonitorService`) reserves a zeroed placeholder so the pointer is
+never null, but nothing on this build ever fills it in -- consistent
+with "every service number fails unconditionally," not merely service 0.
+This closes the loop started in "Kernel image analysis" above: the gap is
+structural on this kernel, not an artifact of openxbdm's own failed
+registration attempt.
+
+## Per-processor control blocks near the debug globals
+
+`0x801a5780`-`0x801a579c` holds six pointers, `0x1000` apart:
+`0x801b0100`, `0x801b1100`, `0x801b2100`, `0x801b3100`, `0x801b4100`,
+`0x801b5100`. Reading the first one shows a `+0x10` field of `6` (the
+hardware thread count: 3 cores x 2 threads, Xenon) and a `+0x14` field
+that varies per entry (`5`, `2`, ... -- plausibly a logical processor
+index, though not confirmed in which direction). Likely a KPCR-style
+per-processor table; not pursued further since it does not bear on the
+module/thread list gap.
+
+## A working, registration-free path to the module list: `XexPcToFileHeader`
+
+`xbdm-nate`'s retail/JTAG build (`../xbdm-nate`, consulted here only for
+technique, not copied -- see `dmmain.c`'s `_resolve()`) never calls
+`ExDebugMonitorService` for the module list at all. It resolves the
+address of an always-present, ordinarily-exported kernel function, then
+reads two of that function's own instruction words to recover the
+absolute address of a kernel global the function references internally
+(`lis`/`addi` pair materializing a constant address -- a byte-code
+reading trick, not a documented API). Nate's own ordinals and word
+offsets are for a different, older kernel build and do not apply here;
+the technique itself does, and was re-derived independently, live,
+against this console's actual kernel build.
+
+Nate resolves `PsLoadedModuleList` and `XexLoadedModuleListLock` off
+kernel ordinal 412. On this kernel (2.0.17559.0), ordinal 412 is
+`XexPcToFileHeader` (confirmed from the XDK's own `xboxkrnl.lib` import
+records, not from any third-party source). Its address was computed by
+parsing the live kernel image's own PE export directory by hand (image
+base `0x80040000`, confirmed from `MmGetMmGlobalData`-style constants
+already in these notes; export table at RVA `0x15e00`, ordinal base 1,
+`AddressOfFunctions` at RVA `0x15e2c`; ordinal 412 -> index 411 -> RVA
+`0x3b498` -> address `0x8007b498`). Disassembling it live (via Capstone,
+PPC big-endian) gives:
+
+```
+lis   r11, 0x801a
+addi  r30, r11, 0x5e18      ; r30 = 0x801a5e18  (module list spinlock)
+...
+bl    0x80070138            ; acquire spinlock r30 (lwarx/stwcx. + IRQL raise; confirmed by disassembly)
+lis   r11, 0x8017
+addi  r10, r11, 0x700       ; r10 = 0x80170700  (module list head, sentinel LIST_ENTRY)
+lwz   r11, 0(r10)           ; r11 = head.Flink
+...loop:
+  lwz   r9, 0x18(r11)       ; entry.Base
+  cmplw cr6, r9, r31        ; r31 = search PC (first argument)
+  bgt   cr6, advance
+  lwz   r8, 0x20(r11)       ; entry.Size
+  add   r8, r8, r9          ; end = Base + Size
+  cmplw cr6, r31, r8
+  blt   cr6, found          ; Base <= pc < end -> return this entry
+advance:
+  lwz   r11, 0(r11)         ; entry.Flink
+  cmplw cr6, r11, r10
+  bne   cr6, loop
+...
+bl    0x8007018c            ; release spinlock r30
+```
+
+Verified live by walking the list by hand: `head.Flink` (`*0x80170700`)
+is `0x801a5d60`. Reading that node's `+0x18`/`+0x20` fields gives
+`Base=0x80040000`, `Size=0x001b0000` -- an exact match for
+`xboxkrnl.exe`'s own `ImageBase`/`SizeOfImage`, independently parsed
+moments earlier from the live PE header. Strong confirmation the walk and
+field offsets are correct for this build.
+
+**Resolved, live, via the `rpc` command (see "Calling into the kernel
+live" below):** the `+0x00` value that looked like garbage
+(`0x3a0c5f48`) was not garbage -- it is a legitimate `ExAllocatePool`
+heap address. `ExAllocatePoolWithTag` (ordinal 10) returned an address
+in the exact same `0x3a0xxxxxx` range on this console
+(`0x3a13bd48`), which is what prompted re-reading that address instead
+of discarding it as corrupt. It is a second, fully-formed list node:
+`Flink=0x3a0d3f48`, `Blink=0x801a5d60` (back to the `xboxkrnl.exe`
+node, confirming a proper doubly-linked circular list), `+0x18`/`+0x1c`
+both `0x815f0000` (`Base`), `+0x20` `0x00610000` (`Size`), and a
+`BaseDllName`/`FullDllName` pair resolving to `\Device\Flash\xam.xex`.
+One more hop (`Flink=0x3a0d3f48`) lands on `Base=0x91f00000` -- this
+console's own loaded `openxbdm-dashlaunch.xex`. So this really is one
+unified list (`xboxkrnl.exe` -> `xam.xex` -> our own module, continuing
+from there), exactly as `xbdm-nate` assumed, no second list. The earlier
+"two lists" theory above (and the `xkelib`-vs-live struct-offset
+"discrepancy" that motivated it) is superseded: `xkelib`'s
+`LDR_DATA_TABLE_ENTRY` is not wrong, `+0x18` (`NtHeadersBase`) and
+`+0x1c` (`ImageBase`) are simply equal for every node seen so far
+(plausible if the mapped image's PE/NT header sits at the very start of
+the image once XEX-loaded, unlike a loose PE file with a DOS stub
+first). `kernel.rs` should still read `Base`/`Size` at `+0x18`/`+0x20`
+-- that is what the live kernel code itself reads for the comparison,
+and it is correct regardless of whichever of `+0x18`/`+0x1c` is "really"
+`ImageBase` by name.
+
+## Calling into the kernel live, via the `rpc` XBDM command
+
+`openxbdm`'s own `commands/group6.md` already specs the `rpc` command in
+full (`version=4 system buf_size=... [thread=...]`), separately
+reverse engineered from devkit XBDM's handler, independent of
+`xbdm-nate`. A prebuilt client (`x360 rpc-call <module> <ordinal>
+[args...]`, this session's workspace, built on the same `xeedee`
+transport as `xeedee-cli`) drives it directly: `<module>!<ordinal>(args)`
+in a system thread, returning the call's integer result. Confirmed
+live against this console (`dashlaunch`-loaded, kernel `2.0.17559.0`):
+
+- `rpc-call xboxkrnl.exe 412 0x1 0x0` (a PC that cannot match any
+  module, output pointer NULL) returned `0` cleanly, no crash --
+  confirms the "no match" path never touches the output pointer,
+  matching the disassembly, and confirms `rpc system` calls work
+  against the `dashlaunch`-hosted XBDM here at all.
+- `rpc-call xboxkrnl.exe 10 0x10 0x6f786264` (`ExAllocatePoolWithTag`,
+  ordinal 10, confirmed against both the XDK's `xboxkrnl.lib` and
+  `xkelib`'s `kernelExpEnum.h`) returned a genuine heap address, used
+  above to recognize the `0x3a0xxxxxx` range as real memory rather than
+  garbage.
+- `rpc-call xboxkrnl.exe 15 <addr>` (`ExFreePool`, ordinal 15) freed it
+  afterward; returned `0`.
+
+This is a safe, general-purpose way to continue this kind of
+investigation without hand-walking raw `getmem` dumps or risking a
+blind write: allocate scratch with ordinal 10, pass its address as any
+function's output parameter, read the result with `getmem`, free with
+ordinal 15. Worth reaching for before any further live kernel-structure
+work on this console.
+
+**Cross-reference, not a source of truth:** `xkelib`
+(`github.com/cOzInABox/xkelib`, community-maintained, used here only to
+sanity-check where to look, per this session's direction that the
+clean-room constraint targets the 1vs100 side of this workspace, not
+openxbdm) ships `kernel/kernelext21256.0.def`, matching this console's
+exact `dmversion` (`2.0.21256.0`). It independently confirms ordinal
+412 = `XexPcToFileHeader` and ordinal 89 = `KeDebugMonitorData` -- same
+answer as the XDK's own `xboxkrnl.lib` and our disassembly, good
+cross-check. Its `LDR_DATA_TABLE_ENTRY` (`kernel/keXexInfo.h`), however,
+puts `ImageBase` at `+0x1c` (three leading 8-byte `LIST_ENTRY`s:
+`InLoadOrderLinks`, `InClosureOrderLinks`, `InInitializationOrderLinks`)
+-- not `+0x18`, where our live read and live disassembly, on this exact
+build, put it. Rather than treat this as a contradiction to resolve by
+picking a side, it supports the two-list theory above: `xkelib`'s
+struct most plausibly describes the richer, title-capable entry type
+(worth the extra `InClosureOrderLinks` bookkeeping XEX loading needs),
+while `PsLoadedModuleList`/`XexPcToFileHeader` on this build may walk a
+slimmer, kernel-image-only list with a smaller leading-`LIST_ENTRY`
+count. Any further use of `xkelib` here should stay at this level --
+pointing at what to check live -- not as a source of addresses or
+offsets to port directly; everything that ends up in `kernel.rs` still
+needs this console's own disassembly or an on-console call to confirm.
+
+**Why this matters:** this is a real, live-verified, retail-compatible
+path to at least part of the module list, entirely independent of
+`ExDebugMonitorService`/`KeDebugMonitorData` (which the two sections
+above show is dead on this kernel). A clean-room port should not
+hardcode this build's addresses (`0x801a5e18`, `0x80170700`,
+`0x8007b498`); instead, resolve `XexPcToFileHeader`'s address at runtime
+via `XexGetProcedureAddress(xboxkrnl.exe, 412)` (works across kernel
+builds, same as any other export use in this codebase) and recover the
+embedded addresses by scanning its first dozen or so instructions for
+the `lis`/`addi` pair pattern at runtime, rather than hardcoding word
+offsets the way `xbdm-nate` does -- `_resolve()`'s fixed offsets are
+exactly the kind of per-build fragility this avoids.
