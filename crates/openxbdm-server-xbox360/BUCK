@@ -66,7 +66,7 @@ xbox360_executable(
     visibility = [
         "PUBLIC",
     ],
-    link_script = "link.x",
+    link_script = "link-dashlaunch.x",
 )
 
 xbox360_executable(

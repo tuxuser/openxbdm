@@ -14,13 +14,16 @@
 #   `encrypt = "retail"` here is the closest equivalent but is NOT itself
 #   verified on hardware yet -- confirm a `dlaunchStartSysModule` load with
 #   this exact manifest before relying on it.
-# - Same load address as xex.toml (0x91f00000, stock XBDM's own address):
-#   correct when this module replaces the console's debug monitor, as
-#   intended. It will conflict (XexLoadImage fails with
-#   STATUS_CONFLICTING_ADDRESSES) if something else is already resident
-#   there, such as a devkit-style kernel debug session running alongside
-#   dashlaunch on the same console -- not expected on a plain retail boot.
-load_address = 0x91f00000
+# - `load_address = 0x91500000`, not xex.toml's 0x91f00000: dashlaunch's
+#   own `launch.xex` is resident at 0x91f00000 on every retail boot
+#   (confirmed live -- a module list walk found it there, name and all),
+#   so a dashlaunch-loaded module cannot share xex.toml's devkit address
+#   without XexLoadImage failing with STATUS_CONFLICTING_ADDRESSES on
+#   every load, which is what happened here before this was caught.
+#   0x91500000 is a free gap between `hud.xex` and `ximecore.xex`,
+#   confirmed live the same way; see link-dashlaunch.x, which this
+#   manifest's address must keep matching.
+load_address = 0x91500000
 version = "2.0.21256.0"
 base_version = "2.0.21256.0"
 image_flags = ["SMALL_PAGES"]
