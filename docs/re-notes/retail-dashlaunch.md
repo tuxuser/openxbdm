@@ -471,26 +471,71 @@ written here. Its `LDR_DATA_TABLE_ENTRY` (`kernel/keXexInfo.h`), however,
 puts `ImageBase` at `+0x1c` (three leading 8-byte `LIST_ENTRY`s:
 `InLoadOrderLinks`, `InClosureOrderLinks`, `InInitializationOrderLinks`)
 -- not `+0x18`, where our live read and live disassembly, on this exact
-build, put it. Rather than treat this as a contradiction to resolve by
-picking a side, it supports the two-list theory above: `xkelib`'s
-struct most plausibly describes the richer, title-capable entry type
-(worth the extra `InClosureOrderLinks` bookkeeping XEX loading needs),
-while `PsLoadedModuleList`/`XexPcToFileHeader` on this build may walk a
-slimmer, kernel-image-only list with a smaller leading-`LIST_ENTRY`
-count. Any further use of `xkelib` here should stay at this level --
-pointing at what to check live -- not as a source of addresses or
-offsets to port directly; everything that ends up in `kernel.rs` still
-needs this console's own disassembly or an on-console call to confirm.
+build, put it. Already resolved above (one unified list, not two):
+`+0x18`/`+0x1c` are simply equal for every node seen so far, plausibly
+because the mapped image's PE/NT header sits at the very start of the
+image once XEX-loaded. Any further use of `xkelib` here should stay at
+this level -- pointing at what to check live -- not as a source of
+addresses or offsets to port directly; everything that ends up in
+`kernel.rs` still needs this console's own disassembly or an
+on-console call to confirm.
 
-**Why this matters:** this is a real, live-verified, retail-compatible
-path to at least part of the module list, entirely independent of
-`ExDebugMonitorService`/`KeDebugMonitorData` (which the two sections
-above show is dead on this kernel). A clean-room port should not
+**Why this matters, and how it was actually ported:** a real,
+live-verified, retail-compatible path to the full module list, entirely
+independent of `ExDebugMonitorService`/`KeDebugMonitorData` (which the
+two sections above show is dead on this kernel). `kernel.rs` does not
 hardcode this build's addresses (`0x801a5e18`, `0x80170700`,
-`0x8007b498`); instead, resolve `XexPcToFileHeader`'s address at runtime
-via `XexGetProcedureAddress(xboxkrnl.exe, 412)` (works across kernel
-builds, same as any other export use in this codebase) and recover the
-embedded addresses by scanning its first dozen or so instructions for
-the `lis`/`addi` pair pattern at runtime, rather than hardcoding word
-offsets the way `xbdm-nate` does -- `_resolve()`'s fixed offsets are
-exactly the kind of per-build fragility this avoids.
+`0x8007b498`); it resolves `XexPcToFileHeader`'s address at runtime via
+`XexGetProcedureAddress(xboxkrnl.exe, 412)` (works across kernel
+builds, same as any other export use in this codebase) and reads the
+`lis`/`addi` pair at this build's recorded *word offsets* within it,
+verifying both instructions' opcodes and that the `addi` reads the
+register the `lis` set before trusting the result -- a kernel build not
+in the table returns `None`, not a guess. The per-build table still
+needs a live-verified entry per build (same as `dashlaunch`'s own
+`kernpat[]`), but every *address* it produces is read fresh each boot.
+
+**Two bugs found and fixed getting this working end to end on
+hardware**, in case either shape recurs:
+
+- **Build-number mismatch.** The signature table above was first keyed
+  on `21256`, read off `xkelib`'s filename
+  (`kernelext21256.0.def`) and off this console's own `dmversion`
+  reply -- both really are `21256`, but that is XBDM's own build
+  number, not the kernel's. `kernel_version()` resolves
+  `XboxKrnlVersion` (kernel ordinal `0x158`), which reads `17559` live
+  on this console, matching this document's very first evidence header
+  ("development kernel 2.0.17559.0") -- a number already on the page,
+  missed at the point it mattered. The mismatch meant
+  `MODULE_LIST_SIGNATURES.iter().find(...)` never matched at runtime,
+  so `modules` silently stayed unresolved while `title_process()`/
+  `system_process()` (build-independent, no table involved) worked
+  fine -- caught by comparing against a working `threads` reply on the
+  same boot. Fixed by keying the table on `17559`.
+- **Load address collision.** `xex-dashlaunch.toml` shared
+  `xex.toml`'s `load_address = 0x91f00000` (the devkit build's own
+  address) on the reasoning that it matches "stock XBDM's own address".
+  On this retail console, though, dashlaunch's own `launch.xex` is
+  resident at exactly `0x91f00000` on every boot (confirmed by this
+  session's own module-list walk, once it worked: `launch.xex` lists
+  itself at `Base=0x91f00000`), so `XexLoadImage` failed with
+  `STATUS_CONFLICTING_ADDRESSES` on every single `dlaunchStartSysModule`
+  load attempt via `launch.ini`'s `[Plugins]` loading -- not a crash
+  with an observable error, just XBDM never coming up, repeatably,
+  across both a from-scratch rebuild of the pre-fix code and several
+  power cycles with different off-times, which is what made this one
+  take real time to isolate from a boot-timing or dashlaunch
+  safe-mode explanation. Fixed by moving the dashlaunch build only
+  (via a separate linker script, `link-dashlaunch.x`; the devkit build
+  keeps `link.x` and its own address) to `0x91500000`, a free gap
+  between `hud.xex` and `ximecore.xex`, confirmed live the same way.
+
+**Confirmed live, end to end**, after both fixes, from an external
+`xeedee-cli` client against the `dashlaunch`-loaded, rebuilt
+`openxbdm-dashlaunch.xex`: `modules` lists all eight resident modules
+with real base/end/size/checksum/timestamp fields (`xboxkrnl.exe`,
+`bootanim.xex`, `xam.xex`, `launch.xex`, `ximecore.xex`, `hud.xex`,
+this module itself at its new `0x91500000`, and the running title
+`lhelper.xex`), and `threads` lists real thread IDs -- both commands
+returned nothing at all before this work, on every retail kernel build
+checked.
