@@ -903,7 +903,12 @@ struct ModuleListSignature {
 
 #[cfg(feature = "dashlaunch")]
 const MODULE_LIST_SIGNATURES: &[ModuleListSignature] = &[ModuleListSignature {
-    build: 21256,
+    // `kernel_version()` reads `XboxKrnlVersion` (the kernel image's own
+    // build, 17559 here), not `dmversion`'s XBDM build number (21256,
+    // a different thing -- confirmed live the hard way: this table
+    // originally said 21256, which never matched, so the module list
+    // silently stayed unresolved while `threads` worked fine).
+    build: 17559,
     lock_lis_word: 3,
     lock_addi_word: 5,
     head_lis_word: 9,

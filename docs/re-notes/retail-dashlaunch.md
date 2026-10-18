@@ -450,11 +450,24 @@ work on this console.
 (`github.com/cOzInABox/xkelib`, community-maintained, used here only to
 sanity-check where to look, per this session's direction that the
 clean-room constraint targets the 1vs100 side of this workspace, not
-openxbdm) ships `kernel/kernelext21256.0.def`, matching this console's
-exact `dmversion` (`2.0.21256.0`). It independently confirms ordinal
-412 = `XexPcToFileHeader` and ordinal 89 = `KeDebugMonitorData` -- same
-answer as the XDK's own `xboxkrnl.lib` and our disassembly, good
-cross-check. Its `LDR_DATA_TABLE_ENTRY` (`kernel/keXexInfo.h`), however,
+openxbdm) ships `kernel/kernelext21256.0.def`, named for `dmversion`'s
+build number (`2.0.21256.0`) -- **not** the kernel's own build. Those
+are two different numbers: `XboxKrnlVersion` (`kernel_version()` in
+`kernel.rs`) reads `17559` live (confirmed by resolving its export,
+ordinal `0x158`, the same way as every other address in this section),
+matching this session's very first evidence header
+("development kernel 2.0.17559.0"). Conflating the two cost real time:
+`kernel.rs`'s per-build module-list signature table originally keyed on
+`21256`, which never matched `kernel_version()[2]` at runtime, so
+`modules` silently stayed unresolved while the (build-independent)
+process-pointer resolution below worked fine -- caught live by
+comparing against a working `threads` reply. `xkelib` has no
+`kernelext17559.*.def`, so its ordinal names here are a coincidental
+match across nearby builds, not a same-build confirmation; still
+correct (independently confirms ordinal 412 = `XexPcToFileHeader` and
+ordinal 89 = `KeDebugMonitorData`, same answer as the XDK's own
+`xboxkrnl.lib` and our disassembly), just not for the reason first
+written here. Its `LDR_DATA_TABLE_ENTRY` (`kernel/keXexInfo.h`), however,
 puts `ImageBase` at `+0x1c` (three leading 8-byte `LIST_ENTRY`s:
 `InLoadOrderLinks`, `InClosureOrderLinks`, `InInitializationOrderLinks`)
 -- not `+0x18`, where our live read and live disassembly, on this exact
