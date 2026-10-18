@@ -1,0 +1,39 @@
+# XEX metadata for a dashlaunch-loaded retail build
+# (docs/re-notes/retail-dashlaunch.md). Differs from xex.toml (the devkit
+# flash-replacement build):
+#
+# - No bounding_path: dashlaunch's `dlaunchStartSysModule`/`[Plugins]`
+#   loading (XexLoadImage flag 8) has no bounding-path check, unlike XAM's
+#   bare-name xbdm.xex search.
+# - `encrypt = "retail"`, not "devkit": `xex-link` only supports the two
+#   keyed modes (no "none"/unencrypted variant exists, unlike Microsoft's
+#   own `imagexex.exe`, a different tool with a different manifest schema
+#   that this project does not use). The hardware probe that originally
+#   validated this file's other choices (retail-dashlaunch.md) used an
+#   *unencrypted* image built with `imagexex.exe` directly, not through
+#   `xex-link`; `encrypt = "retail"` here has since been confirmed on
+#   hardware too, loaded via `dlaunchStartSysModule` with this exact
+#   manifest.
+# - `load_address = 0x91500000`, not xex.toml's 0x91f00000: dashlaunch's
+#   own `launch.xex` is resident at 0x91f00000 on every retail boot
+#   (confirmed live -- a module list walk found it there, name and all),
+#   so a dashlaunch-loaded module sharing xex.toml's devkit address
+#   fails every load with STATUS_CONFLICTING_ADDRESSES (see
+#   docs/re-notes/nuances.md). 0x91500000 is a free gap between
+#   `hud.xex` and `ximecore.xex`, confirmed live the same way; see
+#   link-dashlaunch.x, which this manifest's address must keep matching.
+load_address = 0x91500000
+version = "2.0.21256.0"
+base_version = "2.0.21256.0"
+image_flags = ["SMALL_PAGES"]
+module_flags = ["EXPORTS_TO_TITLE", "SYSTEM_DEBUGGER", "DLL"]
+compress = true
+encrypt = "retail"
+
+[imports]
+version = "2.0.21256.0"
+min_version = "2.0.1861.0"
+
+[exports]
+module = "xbdm.xex"
+min_version = "2.0.1861.0"

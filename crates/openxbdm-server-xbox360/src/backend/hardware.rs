@@ -66,7 +66,6 @@ use xbox360::time::Timebase;
 use xbox360_sys::status::Win32ErrorCode;
 use xbox360_sys::xam;
 use xbox360_sys::xam::XnAddr;
-use xbox360_sys::xam::XnCaller;
 use xbox360_sys::xboxkrnl;
 use xbox360_sys::xboxkrnl::AccessMask;
 use xbox360_sys::xboxkrnl::CreateDisposition;
@@ -368,8 +367,8 @@ impl commands::hardware::Backend for Console {
         let mut debug = XnAddr::default();
         // SAFETY: each query stores one XNADDR.
         unsafe {
-            xam::NetDll_XNetGetTitleXnAddr(XnCaller::DebugMonitor, (&raw mut title).cast());
-            xam::NetDll_XNetGetDebugXnAddr(XnCaller::DebugMonitor, (&raw mut debug).cast());
+            xam::NetDll_XNetGetTitleXnAddr(crate::net::CALLER, (&raw mut title).cast());
+            xam::NetDll_XNetGetDebugXnAddr(crate::net::CALLER, (&raw mut debug).cast());
         }
 
         StackAddresses {

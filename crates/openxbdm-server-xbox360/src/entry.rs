@@ -52,6 +52,7 @@ extern "C" fn module_entry(module: u32, reason: u32, _reserved: u32) -> Boolean 
 
 #[inline(always)]
 fn unload() {
+    crate::trace::trace!("module_entry: unloading");
     request_shutdown();
     close_listener();
     #[cfg(feature = "smb")]
@@ -80,6 +81,8 @@ fn unload() {
     crate::backend::performance::shut_down();
     crate::backend::dispatcher::wait_for_callers();
     crate::backend::debugger::wait_for_event_waiters();
+    crate::trace::trace!("module_entry: unload done");
+    crate::trace::close();
 }
 
 /// Whether the module stays loaded.
@@ -87,6 +90,9 @@ fn unload() {
 fn load(module: u32) -> bool {
     #[cfg(feature = "boot-guard")]
     const BOOT_MARKER_PATH: &[u8] = br"\Device\Harddisk0\Partition1\DEVKIT\FlashEx\openxbdm.arm";
+
+    crate::trace::open();
+    crate::trace::trace!("module_entry: load, module=0x{module:08X}");
 
     // Every later read of these imports skips the check.
     if !kernel::data_imports_resolved() {
@@ -103,22 +109,46 @@ fn load(module: u32) -> bool {
     }
 
     crate::backend::dispatcher::initialize_host();
-    if !kernel::register_debug_monitor(module) {
+    // Registration fails on the retail kernel builds checked so far
+    // (docs/re-notes/retail-dashlaunch.md). `dashlaunch` still tries it,
+    // in case a kernel build supports it, and otherwise fills the debug
+    // monitor data from retail sources; `debugger::install` hooks the
+    // debug routine through dashlaunch's `ldata`.
+    let registered = kernel::register_debug_monitor(module);
+    crate::trace::trace!("module_entry: register_debug_monitor = {registered}");
+    #[cfg(not(feature = "dashlaunch"))]
+    if !registered {
         kernel::debug_print(c"openxbdm: debug monitor registration failed\n");
         return false;
     }
+    #[cfg(feature = "dashlaunch")]
+    if !registered {
+        let modules = kernel::adopt_module_list();
+        crate::trace::trace!("module_entry: adopt_module_list = {modules}");
+        let processes = kernel::adopt_processes();
+        crate::trace::trace!("module_entry: adopt_processes = {processes}");
+    }
 
     crate::backend::debugger::install();
+    crate::trace::trace!("module_entry: debugger::install done");
     crate::backend::network::xhttpproxy::initialize();
+    crate::trace::trace!("module_entry: xhttpproxy::initialize done");
     crate::backend::session::initialize();
+    crate::trace::trace!("module_entry: session::initialize done");
     crate::backend::hardware::initialize();
+    crate::trace::trace!("module_entry: hardware::initialize done");
     crate::backend::dispatcher::install();
+    crate::trace::trace!("module_entry: dispatcher::install done");
     crate::backend::performance::initialize();
+    crate::trace::trace!("module_entry: performance::initialize done");
     crate::backend::memory::initialize();
+    crate::trace::trace!("module_entry: memory::initialize done");
 
     // The hooks above point into the image, so it stays loaded without
     // a server; calls and events take their defaults.
-    if start_thread(server_thread).is_err() {
+    let started = start_thread(server_thread);
+    crate::trace::trace!("module_entry: start_thread = {}", started.is_ok());
+    if started.is_err() {
         stop_server_services();
     }
 

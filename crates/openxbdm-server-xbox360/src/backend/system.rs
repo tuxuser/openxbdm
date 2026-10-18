@@ -23,7 +23,6 @@ use openxbdm_server::commands::system::SettingsSource;
 use xbox360::console::hardware_flags;
 use xbox360::time::sleep;
 use xbox360_sys::xam;
-use xbox360_sys::xam::XnCaller;
 use xbox360_sys::xboxkrnl;
 use xbox360_sys::xboxkrnl::AccessMask;
 use xbox360_sys::xboxkrnl::CreateDisposition;
@@ -277,7 +276,7 @@ impl commands::system::Backend for Console {
         // SAFETY: `file_time` and `previous` are live locals.
         unsafe {
             xboxkrnl::NtSetSystemTime(&file_time, &mut previous);
-            xam::NetDll_XnpNoteSystemTime(XnCaller::DebugMonitor);
+            xam::NetDll_XnpNoteSystemTime(crate::net::CALLER);
         }
     }
 

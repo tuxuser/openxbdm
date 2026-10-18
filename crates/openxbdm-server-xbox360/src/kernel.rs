@@ -5,6 +5,8 @@ mod call;
 mod debug_output;
 mod loader;
 mod monitor;
+#[cfg(feature = "dashlaunch")]
+mod retail;
 mod sync;
 
 use xbox360_sys::xboxkrnl::AnsiString;
@@ -35,6 +37,10 @@ pub use self::monitor::published_debug_monitor_data;
 pub use self::monitor::register_debug_monitor;
 pub use self::monitor::routine_variable;
 pub use self::monitor::version_words;
+#[cfg(feature = "dashlaunch")]
+pub use self::retail::adopt_module_list;
+#[cfg(feature = "dashlaunch")]
+pub use self::retail::adopt_processes;
 pub use self::sync::CriticalSection;
 pub use self::sync::KernelEvent;
 

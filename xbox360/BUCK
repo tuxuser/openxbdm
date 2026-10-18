@@ -29,3 +29,12 @@ xex_from_assembly(
     out = "openxbdm-no-rewrite.xex",
     rewrite = False,
 )
+
+# Retail, loaded as a dashlaunch plugin (docs/re-notes/retail-dashlaunch.md).
+xex_from_assembly(
+    name = "openxbdm-dashlaunch",
+    executable = _MODULE + "-dashlaunch-bin",
+    manifest = "xex-dashlaunch.toml",
+    out = "openxbdm-dashlaunch.xex",
+    visibility = ["PUBLIC"],
+)

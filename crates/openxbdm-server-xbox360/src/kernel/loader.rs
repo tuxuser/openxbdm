@@ -50,9 +50,16 @@ impl LoaderLock {
                 .loaded_module_list_lock
                 .load(Ordering::Relaxed) as usize,
         );
-        // SAFETY: the debug monitor data holds the address of the kernel
-        // loader spin lock; Drop releases it at the returned IRQL.
-        let irql = unsafe { KfAcquireSpinLock(lock) };
+        // A null lock means the debug monitor data was never filled
+        // (`dashlaunch` without a retail resolver); the list heads are then
+        // absent too, so take no lock rather than spin on address 0.
+        let irql = if lock.is_null() {
+            Irql::PASSIVE
+        } else {
+            // SAFETY: the debug monitor data holds the address of the
+            // kernel loader spin lock; Drop releases it at the returned IRQL.
+            unsafe { KfAcquireSpinLock(lock) }
+        };
 
         Self { lock, irql }
     }
@@ -83,8 +90,10 @@ impl LoaderLock {
 impl Drop for LoaderLock {
     #[inline(always)]
     fn drop(&mut self) {
-        // SAFETY: `acquire` took this lock at `self.irql`.
-        unsafe { KfReleaseSpinLock(self.lock, self.irql) };
+        if !self.lock.is_null() {
+            // SAFETY: `acquire` took this lock at `self.irql`.
+            unsafe { KfReleaseSpinLock(self.lock, self.irql) };
+        }
     }
 }
 

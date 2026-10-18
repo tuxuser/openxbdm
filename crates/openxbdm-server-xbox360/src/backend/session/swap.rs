@@ -41,6 +41,12 @@ impl Chain {
     ///
     /// As for [`kernel_swap_routine`].
     unsafe fn install(&mut self) {
+        // Absent when registration failed (`dashlaunch`,
+        // `docs/re-notes/retail-dashlaunch.md`); leaves `installed` false,
+        // so callers retry harmlessly.
+        if kernel::routine_variable(kernel::RoutineVariable::ContextSwap).is_none() {
+            return;
+        }
         // SAFETY: the caller's contract.
         let kernel_slot = unsafe { kernel_swap_routine() };
         self.replaced = kernel_slot.load(Ordering::Relaxed);

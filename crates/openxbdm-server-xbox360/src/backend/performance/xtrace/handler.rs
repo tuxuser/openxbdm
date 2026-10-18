@@ -493,10 +493,12 @@ pub(super) fn hook() {
         };
     }
 
-    // SAFETY: the monitor registered before any trace starts, so the query
-    // service published the address of `KiDebugRoutine`; stock uses it
-    // without a check.
-    let slot = unsafe { kernel::routine_variable(RoutineVariable::Debug).unwrap_unchecked() };
+    // Absent when registration failed (retail under `dashlaunch`,
+    // `docs/re-notes/retail-dashlaunch.md`); `unhook` mirrors this check
+    // through `ROUTINE_SLOT`. Stock uses it without a check.
+    let Some(slot) = kernel::routine_variable(RoutineVariable::Debug) else {
+        return;
+    };
     ROUTINE_SLOT.store(kernel::address_of(slot), Ordering::Release);
 
     let routine = debug_routine_entry as *const () as usize as u32;

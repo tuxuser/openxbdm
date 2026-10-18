@@ -18,6 +18,14 @@ smb = ["openxbdm-server/smb"]
 # Deployment through DEVKIT:\FlashEx: a boot without the marker file
 # DEVKIT:\FlashEx\openxbdm.arm removes the override module and restarts.
 boot-guard = []
+# Retail loading as a dashlaunch plugin (docs/re-notes/retail-dashlaunch.md):
+# `ExDebugMonitorService` registration is unavailable, so the exception hook
+# goes through dashlaunch's `ldata` (`DebugRoutine`/`DebugStepPatch`)
+# instead, and startup skips the devkit-only FlashEx override handling.
+dashlaunch = []
+# File-backed startup trace (src/trace.rs), for diagnosing module startup
+# on hardware with no kernel debugger attached. Not for production builds.
+trace-log = []
 
 [dependencies]
 openxbdm-core = { path = "../openxbdm-core" }

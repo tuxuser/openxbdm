@@ -18,7 +18,6 @@ use xbox360_sys::xam::Socket;
 use xbox360_sys::xam::TimeVal;
 use xbox360_sys::xam::WinsockVersion;
 use xbox360_sys::xam::WsaData;
-use xbox360_sys::xam::XnCaller;
 use xbox360_sys::xam::XnetStartupFlags;
 use xbox360_sys::xam::XnetStartupParams;
 
@@ -45,6 +44,19 @@ struct ActiveConnection {
 
 // Startup work and rare paths stay out of line: a frame inlined into
 // the server loop would stay allocated under every command.
+//
+// `dashlaunch`: XAM and dashlaunch have brought the network up before a
+// plugin loads, and a second `XNetStartup` fails with `WSAEINVAL`
+// (verified on hardware, `docs/re-notes/retail-dashlaunch.md`), which kept
+// the server thread in the retry loop of `run_server`.
+#[cfg(feature = "dashlaunch")]
+#[inline(never)]
+fn initialize_network() -> bool {
+    crate::trace::trace!("initialize_network: skipped (dashlaunch)");
+    true
+}
+
+#[cfg(not(feature = "dashlaunch"))]
 #[inline(never)]
 fn initialize_network() -> bool {
     let startup = XnetStartupParams {
@@ -54,21 +66,15 @@ fn initialize_network() -> bool {
         ..XnetStartupParams::new()
     };
     // SAFETY: `startup` is a live parameter block.
-    if unsafe { xam::NetDll_XNetStartup(XnCaller::DebugMonitor, &startup) } != 0 {
+    if unsafe { xam::NetDll_XNetStartup(crate::net::CALLER, &startup) } != 0 {
         return false;
     }
 
     let mut wsa_data = WsaData::new();
     // SAFETY: `wsa_data` is live storage for the call to fill.
-    unsafe {
-        xam::NetDll_WSAStartup(
-            XnCaller::DebugMonitor,
-            WinsockVersion::new(2, 0),
-            &mut wsa_data,
-        )
-    }
-    .error()
-    .is_none()
+    unsafe { xam::NetDll_WSAStartup(crate::net::CALLER, WinsockVersion::new(2, 0), &mut wsa_data) }
+        .error()
+        .is_none()
 }
 
 pub(crate) fn close_listener() {
@@ -257,6 +263,7 @@ pub(crate) fn run_server() {
     const LISTEN_RETRY_STEPS: u32 = 10;
     const LISTEN_RETRY_STEP: Duration = Duration::from_millis(100);
 
+    crate::trace::trace!("run_server: entered");
     while !initialize_network() {
         if shutting_down() {
             return;
@@ -265,6 +272,7 @@ pub(crate) fn run_server() {
         kernel::debug_print(c"openxbdm: network initialization failed\n");
         sleep(RETRY_DELAY);
     }
+    crate::trace::trace!("run_server: network initialized");
 
     // Stock initializes the studio subsystem last, once the network runs.
     crate::backend::performance::studio::initialize();
@@ -274,8 +282,10 @@ pub(crate) fn run_server() {
     // From here on the server thread takes queued requests until it
     // stops: in its passes, and between listen attempts.
     let Some((server, console)) = crate::backend::dispatcher::begin_serving() else {
+        crate::trace::trace!("run_server: begin_serving returned None, exiting");
         return;
     };
+    crate::trace::trace!("run_server: begin_serving succeeded");
 
     #[cfg(feature = "smb")]
     crate::smb::open(console);
@@ -283,6 +293,7 @@ pub(crate) fn run_server() {
     while !shutting_down() {
         let Ok(listener) = net::listen(XBDM_PORT, LISTEN_BACKLOG) else {
             kernel::debug_print(c"openxbdm: listen failed\n");
+            crate::trace::trace!("run_server: listen failed");
             for _ in 0..LISTEN_RETRY_STEPS {
                 if shutting_down() {
                     break;
@@ -302,6 +313,7 @@ pub(crate) fn run_server() {
         // The message names XBDM_PORT.
         const _: () = assert!(XBDM_PORT == 730);
         kernel::debug_print(c"openxbdm: listening on TCP port 730\n");
+        crate::trace::trace!("run_server: listening on TCP port 730");
 
         let discovery = net::bind_datagram(XBDM_PORT).ok();
         serve(server, console, &mut network, listener, discovery);

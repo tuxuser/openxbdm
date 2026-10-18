@@ -215,7 +215,7 @@ impl Console {
     ) -> NetworkAddress {
         let mut record = [0u8; NETWORK_ADDRESS_SIZE];
         // SAFETY: `record` is a live buffer of the XNADDR size.
-        let status = unsafe { query(XnCaller::DebugMonitor, record.as_mut_ptr()) }.bits();
+        let status = unsafe { query(crate::net::CALLER, record.as_mut_ptr()) }.bits();
 
         NetworkAddress { status, record }
     }
