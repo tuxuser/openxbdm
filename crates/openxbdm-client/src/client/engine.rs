@@ -251,6 +251,12 @@ impl ClientEngine {
         self.arm_response(HeadExpect::EagerBinary(len))
     }
 
+    /// As [`Self::expect_response`], for a `203` reply the caller
+    /// streams as after [`Self::submit_streaming`].
+    pub fn expect_streaming_response(&mut self) -> Result<(), SubmitError> {
+        self.arm_response(HeadExpect::StreamBinary)
+    }
+
     /// Treat every following line as a notification. Called after the
     /// console accepted `notify` with `205- now a notification channel`.
     pub fn enter_notification_mode(&mut self) -> Result<(), SubmitError> {

@@ -390,6 +390,10 @@ pub enum Command {
     #[command(subcommand)]
     Kd(KdCommand),
 
+    /// Call functions on the console.
+    #[command(subcommand)]
+    Rpc(RpcCommand),
+
     /// Set or clear the persistent kernel debugger lite setting. Both
     /// subcommands write the console configuration.
     #[command(subcommand)]
@@ -543,6 +547,43 @@ pub enum KdCommand {
     Except,
     /// Perform `except` only when a kernel debugger is present.
     Exceptif,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RpcCommand {
+    /// Call a function by address, or by export ordinal of a module.
+    Call {
+        /// Function address. Required unless `--module` is given.
+        #[arg(long, value_parser = parse_u32, required_unless_present = "module")]
+        address: Option<u32>,
+        /// Module whose export `--ordinal` is called.
+        #[arg(long, requires = "ordinal", conflicts_with = "address")]
+        module: Option<String>,
+        /// Export ordinal in `--module`.
+        #[arg(long, value_parser = parse_u32, requires = "module")]
+        ordinal: Option<u32>,
+        /// Integer argument, in order (r3 first).
+        #[arg(long = "int", value_parser = parse_u64)]
+        integers: Vec<u64>,
+        /// Floating-point argument, in order (f1 first).
+        #[arg(long = "double")]
+        doubles: Vec<f64>,
+        /// Run in the system process instead of the title.
+        #[arg(long)]
+        system: bool,
+        /// Processor of the call thread.
+        #[arg(long, value_parser = parse_u32, conflicts_with = "thread")]
+        processor: Option<u32>,
+        /// Queue the call for the title thread of this name.
+        #[arg(long)]
+        thread: Option<String>,
+        /// The return value is the double in f1.
+        #[arg(long)]
+        double_result: bool,
+        /// Return the thread's last error.
+        #[arg(long)]
+        last_error: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -741,6 +782,22 @@ pub fn parse_u32(input: &str) -> Result<u32, Error> {
     };
 
     u32::from_str_radix(hex, 16)
+        .map_err(|_| Error::from(ParseError::InvalidHexDigits { key: "cli" }))
+}
+
+/// Parse a decimal number, or a hex number with a `0x` prefix.
+pub fn parse_u64(input: &str) -> Result<u64, Error> {
+    let trimmed = input.trim();
+    let Some(hex) = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+    else {
+        return trimmed
+            .parse::<u64>()
+            .map_err(|_| Error::from(ParseError::InvalidDecimalU64 { key: "cli" }));
+    };
+
+    u64::from_str_radix(hex, 16)
         .map_err(|_| Error::from(ParseError::InvalidHexDigits { key: "cli" }))
 }
 

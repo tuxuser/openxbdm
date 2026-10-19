@@ -291,6 +291,20 @@ where
             .submit_streaming(line)
             .map_err(|e| submit_to_report(e, line))?;
 
+        self.read_stream_head().await
+    }
+
+    /// As [`Self::submit_streaming`], for the 203 that follows an
+    /// out-of-band upload.
+    pub(crate) async fn read_post_upload_stream(&mut self) -> Result<String, Report<Error>> {
+        self.engine
+            .expect_streaming_response()
+            .map_err(|e| submit_to_report(e, "<post-upload stream>"))?;
+
+        self.read_stream_head().await
+    }
+
+    async fn read_stream_head(&mut self) -> Result<String, Report<Error>> {
         let event = self
             .pump_until(|event| is_reply(event) || matches!(event, ClientEvent::BinaryHead { .. }))
             .await?;

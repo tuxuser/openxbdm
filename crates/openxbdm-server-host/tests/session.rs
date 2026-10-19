@@ -14,6 +14,13 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+use openxbdm_client::commands::Rpc;
+use openxbdm_client::commands::RpcContext;
+use openxbdm_client::commands::RpcReturnKind;
+use openxbdm_client::commands::RpcTarget;
+use openxbdm_client::commands::RpcThread;
+use openxbdm_client::commands::RpcValue;
+use openxbdm_client::commands::Win32Error;
 use openxbdm_client::commands::system::ExecutionState;
 use openxbdm_client::commands::system::Notify;
 use openxbdm_client::discovery::DiscoveryConfig;
@@ -878,6 +885,46 @@ fn rpc_runs_on_its_own_thread_and_returns_the_buffer() {
 
     // The stream ends; the connection takes commands again.
     assert_eq!(session.command("srvproc num=2"), "200- prev=0");
+}
+
+#[test]
+fn rpc_client_call_returns_the_value_and_last_error() {
+    let server = TestServer::start();
+    {
+        let mut host = server.host.lock();
+        host.backend.session.rpc_last_error = 0x57;
+        host.backend.session.rpc_functions.insert(
+            0x8200_1000,
+            Box::new(|arguments| RpcRegisters {
+                r3: arguments.integers.iter().sum(),
+                f1: arguments.doubles.iter().sum(),
+            }),
+        );
+    }
+
+    run(async {
+        let mut client = server.client().await;
+        let mut call = Rpc {
+            context: RpcContext::Title,
+            thread: RpcThread::Own { processor: None },
+            target: RpcTarget::Address(0x8200_1000),
+            integers: vec![5, 7],
+            doubles: vec![1.5, 2.0],
+            return_kind: RpcReturnKind::Integer,
+            last_error: true,
+        };
+
+        let outcome = client.rpc(&call).await.unwrap();
+        assert_eq!(outcome.result, Hresult::SUCCESS);
+        assert_eq!(outcome.value, RpcValue::Integer(12));
+        assert_eq!(outcome.last_error, Win32Error::new(0x57));
+
+        call.return_kind = RpcReturnKind::Double;
+        call.last_error = false;
+        let outcome = client.rpc(&call).await.unwrap();
+        assert_eq!(outcome.value, RpcValue::Double(3.5));
+        assert_eq!(outcome.last_error, None);
+    });
 }
 
 #[test]

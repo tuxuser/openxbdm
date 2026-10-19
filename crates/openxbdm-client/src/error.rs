@@ -52,6 +52,9 @@ pub enum Error {
         hresult: crate::commands::Hresult,
     },
 
+    #[error("console rejected rpc: {message:?}")]
+    RpcRejected { message: String },
+
     #[error("unknown status code {code}")]
     UnknownStatusCode { code: StatusCode },
 
@@ -157,6 +160,8 @@ pub enum ArgumentError {
     EmptyFilename,
     #[error("memory length exceeds the protocol's u32 limit")]
     MemoryLengthOverflow,
+    #[error("module name cannot contain NUL")]
+    ModuleNameContainsNul,
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -16,6 +16,7 @@ mod perf;
 mod pix;
 mod progress;
 mod recording;
+mod rpc;
 mod screenshot;
 mod system;
 mod ui;
@@ -259,6 +260,7 @@ where
         }
         Command::Raw { line } => Box::pin(system::raw(client_ref, &line)).await?,
         Command::Kd(command) => kd::kd(client_ref, command).await?,
+        Command::Rpc(command) => Box::pin(rpc::rpc(client_ref, command)).await?,
         Command::Kdlite(command) => kd::kd_lite(client_ref, command).await?,
         Command::Kdnet(command) => Box::pin(kd::kd_net(client_ref, command)).await?,
         #[cfg(feature = "dangerous")]
